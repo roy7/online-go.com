@@ -238,8 +238,6 @@ class PrivateChat {
         (input as any).nicknameTabComplete();
         this.dom.append(input);
 
-        body.click(() => input.focus());
-
         $(document.body).append(this.dom);
 
         body[0].scrollTop = body[0].scrollHeight;
@@ -332,7 +330,7 @@ class PrivateChat {
         } else {
             line.append($("<span>").addClass("username").text(from)).append("<span>: </span>");
         }
-        line.append($("<span>").html(chat_markup(txt)));
+        line.append($("<span>").html(chat_markup(profanity_filter(txt))));
 
 
         this.lines.push(line);
@@ -380,7 +378,6 @@ class PrivateChat {
             this.dom.removeClass("highlighted");
         }
     }; /* }}} */
-
     handleChat(line) { /* {{{ */
 
         if (line.message.i) {
@@ -393,6 +390,7 @@ class PrivateChat {
         //if (line.message.to) {
             //this.addChat(data.get('user').username, line.message.m, 0, line.message.t);
         //} else {
+            line.message.m = profanity_filter(line.message.m);
             this.addChat(line.from.username, line.message.m, line.from.id, line.message.t);
             if (line.from.id !== data.get("user").id) { /* don't open if we were the ones who sent this (from another tab for instance) */
                 if (this.display_state === "closed") {
@@ -421,7 +419,6 @@ class PrivateChat {
             this.removeHilight();
         }
     }; /* }}} */
-
     sendChat(msg) { /* {{{ */
 
         while (msg.length) {
@@ -457,7 +454,7 @@ class PrivateChat {
             update_chat_layout();
         }
     } /* }}} */
-    superchat(enable) {
+    superchat(enable) {{{
         this.superchat_enabled = enable;
         if (enable) {
             this.open();
@@ -483,11 +480,19 @@ class PrivateChat {
                 this.superchat_modal = null;
             }
         }
-    }
+    }}}
 }
 
-function update_chat_layout() {
+function update_chat_layout() {{{
     let pos = $("#em10").width() / 2.5;
+    let max_width = '20rem';
+
+    let window_width = $(window).width();
+    if (window_width < 640) {
+        pos = 0;
+        max_width = '100vw';
+    }
+
     let docked_chats = [];
     for (let i = 0; i < private_chats.length; ++i) {
         if (!private_chats[i].floating) {
@@ -499,11 +504,10 @@ function update_chat_layout() {
 
     for (let i = 0; i < docked_chats.length; ++i) {
         //docked_chats[i].dom.css({"right": pos, "z-index": 50000});
-        docked_chats[i].dom.css({"right": pos});
+        docked_chats[i].dom.css({"right": pos, maxWidth: max_width});
         pos += docked_chats[i].dom.width() + 3;
     }
-};
-
+}}};
 
 export function getPrivateChat(user_id, username?) { /* {{{ */
     if (user_id in instances) {
@@ -512,8 +516,7 @@ export function getPrivateChat(user_id, username?) { /* {{{ */
 
     return (instances[user_id] = new PrivateChat(user_id, username));
 } /* }}} */
-
-comm_socket.on("private-message", (line) => {
+comm_socket.on("private-message", (line) => {{{
     let pc;
     if (line.from.id === data.get("user").id) {
         pc = getPrivateChat(line.to.id);
@@ -532,9 +535,8 @@ comm_socket.on("private-message", (line) => {
     if (pc) {
         pc.handleChat(line);
     }
-});
-
-comm_socket.on("private-superchat", (config) => {
+}}});
+comm_socket.on("private-superchat", (config) => {{{
     let pc;
     if (config.moderator_id !== data.get("user").id) {
         pc = getPrivateChat(config.moderator_id, config.moderator_username);
@@ -556,18 +558,15 @@ comm_socket.on("private-superchat", (config) => {
             pc.open();
         }
     }
-});
-
+}}});
 ITC.register("private-chat-close", (data) => { /* {{{ */
     let pc = getPrivateChat(data.user_id);
     if (pc.display_state === "minimized") {
         pc.close();
     }
 }); /* }}} */
-
 function chat_markup(body) { /* {{{ */
     if (typeof(body) === "string") {
-        body = profanity_filter(body);
         let ret = $("<div>").text(body).html();
         let link_matcher = /(((ftp|http)(s)?:\/\/)([^<> ]+))/gi;
         ret = ret.replace(link_matcher, "<a target='_blank' href='$1'>$1</a>");

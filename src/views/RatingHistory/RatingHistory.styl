@@ -15,42 +15,18 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-.GameList {
-    max-width: 100vw;
-    overflow-x: auto;
-    text-align: center;
+.RatingHistory {
 
-    .GobanLineSummaryContainerHeader {
-        user-select: none;
-        > div {
-            white-space: nowrap;
-        }
+    #rating-history-tooltip a {
+        color: #8AB3D0;
     }
 
-    .sortable {
-        cursor: pointer;
-    }
-    .sortable:after {
-        display: inline-block;
-        width: 0.8rem;
-        font-size: 0.7rem;
-        margin-left: 0.2rem;
-        margin-bottom: 0.2rem;
-        font-family: 'FontAwesome';
-        content: " ";
+    #rating-history {
+        position: fixed;
+        top: navbar-height+4em;
+        bottom: 1rem;
+        left: 1rem;
+        right: 1rem;
     }
 
-    .sortable.sorted-asc:after {
-        content: fa-sort-asc-content;
-    }
-
-    .sortable.sorted-desc:after {
-        content: fa-sort-desc-content;
-    }
-
-
-    
-    .current-users-move {
-        themed background-color miniboard-to-move
-    }
 }

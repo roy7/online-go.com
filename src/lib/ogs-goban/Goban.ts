@@ -113,6 +113,7 @@ export abstract class Goban extends EventEmitter {
     private highlight_movetree_moves;
     private interactive;
     private isInPushedAnalysis;
+    private leavePushedAnalysis;
     private isPlayerController;
     private isPlayerOwner;
     private label_character;
@@ -269,6 +270,7 @@ export abstract class Goban extends EventEmitter {
         this.isPlayerOwner = config.isPlayerOwner || (() => false); /* for reviews  */
         this.isPlayerController = config.isPlayerController || (() => false); /* for reviews  */
         this.isInPushedAnalysis = config.isInPushedAnalysis ? config.isInPushedAnalysis : (() => false);
+        this.leavePushedAnalysis = config.leavePushedAnalysis ? config.leavePushedAnalysis : (() => false);
         this.onPendingResignation = config.onPendingResignation;
         this.onPendingResignationCleared = config.onPendingResignationCleared;
         this.onError = "onError" in config ? config.onError : null;
@@ -619,6 +621,10 @@ export abstract class Goban extends EventEmitter {
                         return;
                     }
                     let move = move_obj.move;
+
+                    if (this.isInPushedAnalysis()) {
+                        this.leavePushedAnalysis();
+                    }
 
                     /* clear any undo state that may be hanging around */
                     delete this.engine.undo_requested;
@@ -2437,6 +2443,7 @@ export abstract class Goban extends EventEmitter {
         {{{
             let transparent = letter_was_drawn;
             let hovermark = null;
+            let symbol_color = stone_color === 1 ? this.theme_black_text_color : stone_color === 2 ? this.theme_white_text_color : text_color;
 
             if (this.analyze_tool === "label" && (this.last_hover_square && this.last_hover_square.x === i && this.last_hover_square.y === j)) {
                 if (this.analyze_subtool === "triangle" || this.analyze_subtool === "square" || this.analyze_subtool === "cross" || this.analyze_subtool === "circle") {
@@ -2454,7 +2461,7 @@ export abstract class Goban extends EventEmitter {
                 if (transparent) {
                     ctx.globalAlpha = 0.6;
                 }
-                ctx.strokeStyle = stone_color === 1 ? this.theme_black_text_color : this.theme_white_text_color;
+                ctx.strokeStyle = symbol_color;
                 ctx.lineWidth = this.square_size * 0.075;
                 ctx.arc(cx, cy, this.square_size * 0.25, 0, 2 * Math.PI, false);
                 ctx.stroke();
@@ -2468,7 +2475,7 @@ export abstract class Goban extends EventEmitter {
                 if (transparent) {
                     ctx.globalAlpha = 0.6;
                 }
-                ctx.strokeStyle = stone_color === 1 ? this.theme_black_text_color : this.theme_white_text_color;
+                ctx.strokeStyle = symbol_color;
                 if (pos.chat_triangle) {
                     ctx.strokeStyle = "#00aaFF";
                 }
@@ -2496,7 +2503,7 @@ export abstract class Goban extends EventEmitter {
                 ctx.lineTo(cx + r, cy + r);
                 ctx.moveTo(cx + r, cy - r);
                 ctx.lineTo(cx - r, cy + r);
-                ctx.strokeStyle = stone_color === 1 ? this.theme_black_text_color : this.theme_white_text_color;
+                ctx.strokeStyle = symbol_color;
                 ctx.stroke();
                 ctx.restore();
                 draw_last_move = false;
@@ -2516,7 +2523,7 @@ export abstract class Goban extends EventEmitter {
                 ctx.lineTo(cx + r, cy + r);
                 ctx.lineTo(cx - r, cy + r);
                 ctx.lineTo(cx - r, cy - r);
-                ctx.strokeStyle = stone_color === 1 ? this.theme_black_text_color : this.theme_white_text_color;
+                ctx.strokeStyle = symbol_color;
                 ctx.stroke();
                 ctx.restore();
                 draw_last_move = false;
@@ -2960,8 +2967,8 @@ export abstract class Goban extends EventEmitter {
         this.themes = themes;
 
         this.theme_board = new (GoThemes["board"][themes.board])();
-        this.theme_white = new (GoThemes["white"][themes.white])();
-        this.theme_black = new (GoThemes["black"][themes.black])();
+        this.theme_white = new (GoThemes["white"][themes.white])(this.theme_board);
+        this.theme_black = new (GoThemes["black"][themes.black])(this.theme_board);
 
         if (!this.metrics) {
             this.metrics = this.computeMetrics();
@@ -3370,7 +3377,7 @@ export abstract class Goban extends EventEmitter {
         }
     }; /* }}} */
 
-    private setConditionalTree(conditional_tree) { /* {{{ */
+    public setConditionalTree(conditional_tree) { /* {{{ */
         if (conditional_tree == null) {
             conditional_tree = new GoConditionalMove(null, null);
         }
@@ -4142,10 +4149,10 @@ export abstract class Goban extends EventEmitter {
                                 }
                             }, 1100);
                         }
-                        if (sound_to_play && window["user"].id === this.engine.playerToMove() && player_id === window["user"].id) {
+
+                        if (sound_to_play && window["user"].id === clock.current_player && player_id === window["user"].id) {
                             if (this.last_sound_played !== sound_to_play) {
                                 this.last_sound_played = sound_to_play;
-
 
                                 if (this.getShouldPlayVoiceCountdown()) {
                                     sfx.play(sound_to_play);

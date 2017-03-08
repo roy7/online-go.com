@@ -18,7 +18,7 @@
 import * as React from "react";
 import {_, pgettext, interpolate, cc_to_country_name, sorted_locale_countries} from "translate";
 import {Link} from "react-router";
-import {post, get, put, patch} from "requests";
+import {post, get, put, del, patch} from "requests";
 import config from "config";
 import data from "data";
 import * as moment from "moment";
@@ -338,6 +338,18 @@ export class User extends Resolver<UserProperties, any> {
                     id: this.user_id,
                     icon: res.icon,
                 });
+            });
+        })
+        .catch(errorAlerter);
+    }}}
+    clearIcon = () => {{{
+        this.setState({new_icon: null});
+        del(`players/${this.user_id}/icon`)
+        .then((res) => {
+            console.log("Cleared icon", res);
+            player_cache.update({
+                id: this.user_id,
+                icon: res.icon,
             });
         })
         .catch(errorAlerter);
@@ -693,11 +705,14 @@ export class User extends Resolver<UserProperties, any> {
             <div className="row">
                 <div className="col-sm-8">
                     { (window["user"].is_moderator) && <button className="danger xs pull-right" onClick={this.openModerateUser}>{_("Moderator Controls")}</button> }
-                    <h1>{user.username}</h1>
-                    <Card className="profile-card">
+                    <h1>{user.username}
                         {((global_user.id === user.id || global_user.is_moderator) || null)   &&
-                            <i className={editing ? "fa fa-save" : "fa fa-pencil"} onClick={this.toggleEdit}/>
+                            <button onClick={this.toggleEdit} className='xs edit-button'>
+                                <i className={editing ? "fa fa-save" : "fa fa-pencil"}/> {" " + (editing ? _("Save") : _("Edit"))}
+                            </button>
                         }
+                    </h1>
+                    <Card className="profile-card">
                         <div className="row">
                             <div className="col-sm-2" style={{minWidth: "128px"}}>
                                 {this.state.editing
@@ -705,9 +720,12 @@ export class User extends Resolver<UserProperties, any> {
                                         {this.state.new_icon
                                             ? <img src={this.state.new_icon.preview} style={{height: "128px", width: "128px"}} />
                                             : <PlayerIcon id={user.id} size={128} />
-                                        }   
+                                        }
                                        </Dropzone>
                                     : <PlayerIcon id={user.id} size={128} />
+                                }
+                                {this.state.editing &&
+                                    <button className='xs' onClick={this.clearIcon}>{_("Clear icon")}</button>
                                 }
                             </div>
 
@@ -782,7 +800,7 @@ export class User extends Resolver<UserProperties, any> {
 
                                     <dt>{_("Country")}</dt>
                                     {this.state.editing
-                                      ? <dd> 
+                                      ? <dd>
                                             <Flag country={user.country} big/>
                                             <select value={user.country} onChange={this.saveCountry}>
                                                 {sorted_locale_countries.map((C) => (
@@ -808,7 +826,7 @@ export class User extends Resolver<UserProperties, any> {
                                         <dd><input type="url" value={user.website} onChange={this.saveWebsite} /></dd>
                                     }
 
-                                    
+
                                     {(this.state.titles.length > 0) && <dt >{_("Titles")}</dt>}
                                     {(this.state.titles.length > 0) && <dd className="trophies">
                                         {this.state.titles.map((title, idx) => (<img key={idx} className="trophy" src={`${config.cdn_release}/img/trophies/${title.icon}`} title={title.title}/>))}
@@ -870,7 +888,7 @@ export class User extends Resolver<UserProperties, any> {
 
 
                     <h2>{_("Active Games")}</h2>
-                    <GameList list={this.state.active_games}  opponentStyle={true}/>
+                    <GameList list={this.state.active_games} player={user}/>
                 </div>
                 {/* end left col */}
 
@@ -888,7 +906,7 @@ export class User extends Resolver<UserProperties, any> {
                                 <div className="progress-bar info" style={{width: this.state.statistics.drawPerc + "%"}}>{this.state.statistics.draws || <span>&nbsp;</span>}</div>
                             </div>
 
-                                
+
                             <table><tbody><tr>
                                     <td style={{verticalAlign: "top"}}><i className="fa fa-circle-o" title={_("Overall")} style={{width: "1.5rem !important", textAlign: "center"}}></i></td>
                                     <td style={nowrapAlignTop}><Rank ranking={user.ranking}></Rank>&nbsp;</td>
@@ -943,6 +961,7 @@ export class User extends Resolver<UserProperties, any> {
                             </tr></tbody></table>
 
                             <div id="rating-history"></div>
+                            <div className="text-align-center"><Link to={interpolate("/ratinghistory/{{user_id}}", {"user_id": this.user_id})} target="_blank"><i className="fa fa-arrows-alt"></i>{" " + _("Full View")}</Link></div>
                         </Card>
                         </div>
                     }
@@ -1080,7 +1099,7 @@ export class User extends Resolver<UserProperties, any> {
                     <h2>{_("Game History")}</h2>
                     <Card>
                     <div>{/* loading-container="game_history.settings().$loading" */}
-                        <div style={{width: "20rem", "float": "right", marginBottom: "0.2rem"}}>
+                        <div className="search">
                             <PlayerAutocomplete onComplete={this.updateGameSearch}/>
                         </div>
 
@@ -1117,7 +1136,7 @@ export class User extends Resolver<UserProperties, any> {
                     <h2>{_("Reviews and Demos")}</h2>
                     <Card>
                         <div>{/* loading-container="game_history.settings().$loading" */}
-                            <div style={{width: "20rem", "float": "right", marginBottom: "0.2rem"}}>
+                            <div className="search">
                                 <PlayerAutocomplete onComplete={this.updateReviewSearch}/>
                             </div>
 

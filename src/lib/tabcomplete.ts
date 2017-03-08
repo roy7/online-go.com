@@ -18,7 +18,6 @@ declare var $;
  * (c) 2006 Alex Brem <alex@0xab.cd> - http://blog.0xab.cd
  */
 function getSelection(field) {
-
     let e = field;
 
     return (
@@ -135,14 +134,14 @@ function onKeyPress(e, options) {
     if (e.which === 9) {
         let $this = $(this);
         let val = $this.val();
-        let sel = getSelection(this);
+        let sel = getSelection($this[0]);
         let text = "";
         let match: any = "";
         let first;
         let last;
         let completed_event;
 
-        if (!sel.length && sel.start) {
+        if (sel !== null && !sel.length && sel.start) {
             if ($.fn.nicknameTabComplete.has_newline_bug) {
                 // Carriage return fix
                 text = this.value.substr(0, sel.start);

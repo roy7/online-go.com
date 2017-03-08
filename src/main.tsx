@@ -18,6 +18,7 @@
 /// <reference path="../typings_manual/index.d.ts" />
 
 import data from "data";
+
 data.setDefault("theme", "light");
 data.setDefault("config", {
     "user": {
@@ -39,6 +40,8 @@ import {errorAlerter} from "misc";
 import * as sockets from "sockets";
 import {_} from "translate";
 import {init_tabcomplete} from "tabcomplete";
+import player_cache from "player_cache";
+import {toast} from 'toast';
 
 import {NavBar} from "NavBar";
 import {Announcements} from "Announcements";
@@ -71,6 +74,7 @@ import {TournamentListMainView} from "TournamentList";
 import {TransactionHistory} from "TransactionHistory";
 import {Tutorial} from "Tutorial";
 import {User} from "User";
+import {RatingHistory} from "RatingHistory";
 import {Settings} from "Settings";
 import {Styling} from "Styling";
 import {AnnouncementCenter} from "AnnouncementCenter";
@@ -86,7 +90,11 @@ data.watch("config", (config) => {
     }
 });
 get("ui/config").then((config) => data.set("config", config));
-data.watch("config.user", (user) => {data.set("user", user); window["user"] = user; });
+data.watch("config.user", (user) => {
+    player_cache.update(user);
+    data.set("user", user);
+    window["user"] = user;
+});
 
 
 /*** SweetAlert setup ***/
@@ -101,6 +109,21 @@ swal.setDefaults({
     //focusCancel: true,
 });
 
+
+/***
+ * Test if local storage is disabled for some reason (Either because the user
+ * turned it off, the browser doesn't support it, or because the user is using
+ * Safari in private browsing mode which implicitly disables the feature.)
+ */
+try {
+    localStorage.setItem('localstorage-test', "true");
+} catch (e) {
+    toast(
+        <div>
+            {_("It looks like localStorage is disabled on your browser. Unfortunately you won't be able to login without enabling it first.")}
+        </div>
+    );
+}
 
 
 /*** Layout our main view and routes ***/
@@ -200,6 +223,9 @@ const routes = (
         <Route path="/user/view/:user_id" component={User}/>
         <Route path="/user/view/:user_id/*" component={User}/>
         <Route path="/user/view/:user_id/**/*" component={User}/>
+        <Route path="/ratinghistory/:user_id" component={RatingHistory}/>
+        <Route path="/ratinghistory/:user_id/*" component={RatingHistory}/>
+        <Route path="/ratinghistory/:user_id/**/*" component={RatingHistory}/>
         <Route path="/settings" component={Settings}/>
         <Route path="/user/settings" component={Settings}/>
         <Route path="/user/supporter" component={Supporter}/>

@@ -43,7 +43,7 @@ interface ChatProperties {
     autofocus?: boolean;
     showChannels?: boolean;
     showUserList?: boolean;
-    updateTitle?: boolean;
+    updateTitle: boolean;
 }
 
 let name_match_regex = /^loading...$/;
@@ -172,7 +172,7 @@ export class Chat extends React.Component<ChatProperties, any> {
             .then((groups) => this.setState({group_channels: groups.results.sort((a, b) => a.name.localeCompare(b.name))}))
             .catch((err) => 0);
 
-            get("me/tournaments", {page_size: 30})
+            get("me/tournaments", {ended__isnull:true, page_size: 30})
             .then((tournaments) => this.setState({tournament_channels: tournaments.results.sort((a, b) => a.name.localeCompare(b.name))}))
             .catch((err) => 0);
         }
@@ -196,7 +196,21 @@ export class Chat extends React.Component<ChatProperties, any> {
             canvas: this.seekgraph_canvas,
             show_live_games: true,
         });
-        this.seekgraph.resize($(this.seekgraph_canvas).width(), $(this.seekgraph_canvas).height());
+
+        let I;
+        let sanityCheck = 100;
+        let resizeSeekgraph = () => {
+            --sanityCheck;
+            if ($(this.seekgraph_canvas).width() > 0) {
+                this.seekgraph.resize($(this.seekgraph_canvas).width(), $(this.seekgraph_canvas).height());
+                clearInterval(I);
+            }
+            else if (sanityCheck <= 0) {
+                clearInterval(I);
+            }
+        };
+        I = setInterval(resizeSeekgraph, 50);
+        resizeSeekgraph();
     }}}
     componentDidUpdate() {{{
         this.autoscroll();
@@ -206,7 +220,9 @@ export class Chat extends React.Component<ChatProperties, any> {
         comm_socket.off("connect", this.connect);
         comm_socket.off("disconnect", this.disconnect);
         $(window).off("focus", this.onDocumentFocus);
-        window.document.title = "OGS";
+        if (this.props.updateTitle) {
+            window.document.title = "OGS";
+        }
         this.seekgraph.destroy();
     }}}
 
@@ -241,7 +257,9 @@ export class Chat extends React.Component<ChatProperties, any> {
     }}}
     onDocumentFocus = () => {{{
         this.unread_ct = 0;
-        window.document.title = _("Chat");
+        if (this.props.updateTitle) {
+            window.document.title = _("Chat");
+        }
     }}}
 
     onChatMessage = (obj) => {{{
@@ -297,10 +315,14 @@ export class Chat extends React.Component<ChatProperties, any> {
 
         if (document.hasFocus()) {
             this.unread_ct = 0;
-            window.document.title = _("Chat");
+            if (this.props.updateTitle) {
+                window.document.title = _("Chat");
+            }
         } else {
             ++this.unread_ct;
-            window.document.title = `(${this.unread_ct}) ` + _("Chat");
+            if (this.props.updateTitle) {
+                window.document.title = `(${this.unread_ct}) ` + _("Chat");
+            }
         }
     }}}
     onChatJoin = (joins) => {{{
@@ -602,6 +624,8 @@ export class Chat extends React.Component<ChatProperties, any> {
             let c = getChannel(channel);
             if (c.unread_ct) {
                 return <span className="unread-count" data-count={"(" + c.unread_ct + ")"} data-leave={_("leave")} onClick={this.part.bind(this, channel, false, false)} />;
+            } else if (channel in this.state.joined_channels) {
+                return <span className="unread-count" data-count="" data-leave={_("leave")} onClick={this.part.bind(this, channel, false, false)} />;
             }
             /*
             if (c.user_count) {
@@ -619,7 +643,7 @@ export class Chat extends React.Component<ChatProperties, any> {
                 {this.props.showChannels &&
                     <div className={"channel-container" + (this.state.force_show_channels ? " force-show" : "")}>
                         <div ref="channels" className={"channels" + (!this.state.show_all_channels ? " hide-unjoined" : "")}>
-                        
+
                             {(this.state.group_channels.length > 0 || null) && (
                                 <div className="channel-header">
                                     <span>{_("Group Channels")}</span>
@@ -746,9 +770,65 @@ function ChatLine(props) {{{
     let ts = message.t ? new Date(message.t * 1000) : null;
     let third_person = false;
     let body = message.m;
-    if (typeof(body) === "string" && body.substr(0, 4) === "/me ") {
+
+    if (typeof(body) === 'string') {
+
+      let searchString = (site, parameters) => {
+
+        if (parameters.length === 1) {
+            return site + parameters[0];
+        }
+
+        return site +
+               parameters[0] +
+               '+' +
+               parameters
+                 .slice(1, parameters.length)
+                 .join('+')
+                 .slice(0);
+      };
+
+      let targetUser = (bodyString) => {
+        if (bodyString.split(' ')[0] === '-user') {
+          return bodyString.split(' ')[1] + ' ';
+        } else {
+          return '';
+        }
+      };
+
+      let generateChatSearchLine = (urlString, command, body) => {
+        let target = targetUser(body.substr(command.length));
+        let params = body.split(' ');
+        if (target.length > 0) {
+          return  target.slice(0, target.length - 1) + ": " +
+                  searchString(urlString, params.slice(3, params.length));
+        } else {
+          return  searchString(urlString, params.slice(1, params.length));
+        }
+      };
+
+      if (body.substr(0, 4) === '/me ') {
         third_person = (body.substr(0, 4) === "/me ");
         body = body.substr(4);
+      }
+
+      if (body.substr(0, 8) === '/sensei ') {
+        body = generateChatSearchLine(
+          'http://senseis.xmp.net/?search=', '/sensei ', body
+        );
+      }
+
+      if (body.substr(0, 8) === '/google ') {
+          body = generateChatSearchLine(
+          'https://www.google.com/#q=', '/google ', body
+        );
+      }
+
+      if (body.substr(0, 8) === '/lmgtfy ') {
+          body = generateChatSearchLine(
+          'https://www.lmgtfy.com/?q=', '/lmgtfy ', body
+        );
+      }
     }
 
     let mentions = name_match_regex.test(body);

@@ -119,6 +119,8 @@ export class Game extends OGSComponent<GameProperties, any> {
     on_refocus_title: string = "OGS";
     last_move_viewed: number = 0;
     conditional_move_tree;
+    leave_pushed_analysis: () => void = null;
+    stashed_conditional_moves = null;
 
 
     decide_white: () => void;
@@ -343,6 +345,11 @@ export class Game extends OGSComponent<GameProperties, any> {
             "interactive": true,
             "connect_to_chat": true,
             "isInPushedAnalysis": () => this.in_pushed_analysis,
+            "leavePushedAnalysis": () => {
+                if (this.leave_pushed_analysis) {
+                    this.leave_pushed_analysis();
+                }
+            },
 
             /*
             "onChat": function(m,t) { chat_handlers.handleChat(m,t); },
@@ -544,15 +551,18 @@ export class Game extends OGSComponent<GameProperties, any> {
     nav_up() {{{
         this.checkAndEnterAnalysis();
         this.goban.prevSibling();
+        this.goban.syncReviewMove();
     }}}
     nav_down() {{{
         this.checkAndEnterAnalysis();
         this.goban.nextSibling();
+        this.goban.syncReviewMove();
     }}}
     nav_first() {{{
         this.stopAutoplay();
         this.checkAndEnterAnalysis();
         this.goban.showFirst();
+        this.goban.syncReviewMove();
     }}}
     nav_prev_10() {{{
         this.stopAutoplay();
@@ -560,11 +570,13 @@ export class Game extends OGSComponent<GameProperties, any> {
         for (let i = 0; i < 10; ++i) {
             this.goban.showPrevious();
         }
+        this.goban.syncReviewMove();
     }}}
     nav_prev() {{{
         this.stopAutoplay();
         this.checkAndEnterAnalysis();
         this.goban.showPrevious();
+        this.goban.syncReviewMove();
     }}}
     nav_next(event?: React.MouseEvent<any>, dont_stop_autoplay?: boolean) {{{
         if (!dont_stop_autoplay) {
@@ -572,6 +584,7 @@ export class Game extends OGSComponent<GameProperties, any> {
         }
         this.checkAndEnterAnalysis();
         this.goban.showNext();
+        this.goban.syncReviewMove();
     }}}
     nav_next_10() {{{
         this.stopAutoplay();
@@ -579,11 +592,13 @@ export class Game extends OGSComponent<GameProperties, any> {
         for (let i = 0; i < 10; ++i) {
             this.goban.showNext();
         }
+        this.goban.syncReviewMove();
     }}}
     nav_last() {{{
         this.stopAutoplay();
         this.checkAndEnterAnalysis();
         this.goban.jumpToLastOfficialMove();
+        this.goban.syncReviewMove();
     }}}
     nav_play_pause() {{{
         if (this.state.autoplaying) {
@@ -1147,11 +1162,12 @@ export class Game extends OGSComponent<GameProperties, any> {
                     this.stone_removal_accept_timeout = null;
                 }, device.is_mobile ? 3000 : 1500 );
 
-                new_state.black_accepted = engine.players["black"].accepted_stones === stone_removals && engine.players["black"].accepted_strict_seki_mode === engine.strict_seki_mode;
-                new_state.white_accepted = engine.players["white"].accepted_stones === stone_removals && engine.players["white"].accepted_strict_seki_mode === engine.strict_seki_mode;
+                new_state.black_accepted = engine.players["black"].accepted_stones === stone_removals;
+                new_state.white_accepted = engine.players["white"].accepted_stones === stone_removals;
             }
 
-            if ((engine.phase === "stone removal" || engine.phase === "finished") && goban.mode === "play") {
+            if ((engine.phase === "stone removal" || engine.phase === "finished") &&
+              engine.outcome !== "Timeout" && engine.outcome !== "Resignation" && engine.outcome !== "Cancellation" && goban.mode === "play") {
                 new_state.score = engine.computeScore(false);
                 goban.showScores(new_state.score);
             } else {
@@ -1176,6 +1192,7 @@ export class Game extends OGSComponent<GameProperties, any> {
             /* review stuff */
             new_state.review_owner_id = goban.review_owner_id;
             new_state.review_controller_id = goban.review_controller_id;
+            new_state.review_out_of_sync = engine.cur_move && engine.cur_review_move && (engine.cur_move.id !== engine.cur_review_move.id);
         }
 
         this.setState(new_state);
@@ -1281,6 +1298,7 @@ export class Game extends OGSComponent<GameProperties, any> {
         if (this.goban.engine.disable_analysis && this.goban.engine.phase !== "finished") {
             //swal(_("Conditional moves have been disabled for this game."));
         } else {
+            this.stashed_conditional_moves = this.goban.conditional_tree.duplicate();
             this.goban.setMode("conditional");
         }
     }}}
@@ -1385,6 +1403,10 @@ export class Game extends OGSComponent<GameProperties, any> {
     }}}
     goban_setMode_play() {{{
         this.goban.setMode("play");
+        if (this.stashed_conditional_moves) {
+            this.goban.setConditionalTree(this.stashed_conditional_moves);
+            this.stashed_conditional_moves = null;
+        }
     }}}
     goban_resumeGame() {{{
         this.goban.resumeGame();
@@ -1393,6 +1415,7 @@ export class Game extends OGSComponent<GameProperties, any> {
         this.goban.jumpToLastOfficialMove();
     }}}
     acceptConditionalMoves() {{{
+        this.stashed_conditional_moves = null;
         this.goban.saveConditionalMoves();
         this.goban.setMode("play");
     }}}
@@ -1509,6 +1532,7 @@ export class Game extends OGSComponent<GameProperties, any> {
     syncToCurrentReviewMove = () => {{{
         if (this.goban.engine.cur_review_move) {
             this.goban.engine.jumpTo(this.goban.engine.cur_review_move);
+            this.sync_state();
         } else {
             setTimeout(this.syncToCurrentReviewMove, 50);
         }
@@ -1571,7 +1595,7 @@ export class Game extends OGSComponent<GameProperties, any> {
 
                     {this.frag_below_board_controls()}
 
-                    {/* ((this.state.view_mode === 'wide' && win.width() > 1024) || null) && CURSE_ATF_AD */} 
+                    {/* ((this.state.view_mode === 'wide' && win.width() > 1024) || null) && CURSE_ATF_AD */}
 
                     {((this.state.view_mode === "square" && !this.state.squashed) || null) && CHAT}
 
@@ -1637,10 +1661,7 @@ export class Game extends OGSComponent<GameProperties, any> {
                 <span>
                     {(state.cur_move_number >= 1 && state.player_not_to_move === data.get("user").id &&
                       !(this.goban.engine.undo_requested >= this.goban.engine.getMoveNumber()) && this.goban.submit_move == null || null) &&
-                         <button
-                            className="bold undo-button"
-                            style={{position: "absolute", left: "0.5em", bottom: "0.5em"}}
-                            onClick={this.undo}>{_("Undo")}</button>
+                         <button className="bold undo-button xs" onClick={this.undo}>{_("Undo")}</button>
                     }
                     {state.show_undo_requested &&
                         <span>
@@ -1684,6 +1705,32 @@ export class Game extends OGSComponent<GameProperties, any> {
 
         return (
             <div className="play-controls">
+                <div className="game-action-buttons">{/* {{{ */}
+                    {(state.mode === "play" && state.phase === "play" && state.cur_move_number >= state.official_move_number || null) &&
+                        this.frag_play_buttons(show_cancel_button)
+                    }
+                    {(state.mode === "play" && state.phase === "play" && this.goban.engine.disable_analysis && state.cur_move_number < state.official_move_number || null) &&
+                        <span>
+                            <button className="sm primary bold" onClick={this.goban_setModeDeferredPlay}>{_("Back to Game")}</button>
+                        </span>
+                    }
+
+                    {(state.mode === "analyze" && !this.goban.engine.config.original_sgf || null) &&
+                        <span>
+                            <button className="sm primary bold" onClick={this.goban_setModeDeferredPlay}>{_("Back to Game")}</button>
+                            <button className="sm primary bold pass-button" onClick={this.analysis_pass}>{_("Pass")}</button>
+                        </span>
+                    }
+
+                    {(state.mode === "score estimation" || null) &&
+                        <span>
+                            <button className="sm primary bold" onClick={this.stopEstimatingScore}>{_("Back to Game")}</button>
+                        </span>
+                    }
+
+                    {/* (this.state.view_mode === 'portrait' || null) && <i onClick={this.togglePortraitTab} className={'tab-icon fa fa-commenting'}/> */}
+                </div>
+                {/* }}} */}
                <div className="game-state">{/*{{{*/}
                     {(state.mode === "play" && state.phase === "play" || null) &&
                         <span>
@@ -1705,14 +1752,14 @@ export class Game extends OGSComponent<GameProperties, any> {
                         </span>
                     }
 
-                    
+
                     {(state.mode === "analyze" || null) &&
                         <span>
                             {_("Analyze Mode")}
                         </span>
                     }
 
-                    
+
                     {(state.mode === "conditional" || null) &&
                         <span>
                             {_("Conditional Move Planner")}
@@ -1749,32 +1796,6 @@ export class Game extends OGSComponent<GameProperties, any> {
                     }
                 </div>
                 {/*}}}*/}
-                <div className="game-action-buttons">{/* {{{ */}
-                    {(state.mode === "play" && state.phase === "play" && state.cur_move_number >= state.official_move_number || null) &&
-                        this.frag_play_buttons(show_cancel_button)
-                    }
-                    {(state.mode === "play" && state.phase === "play" && this.goban.engine.disable_analysis && state.cur_move_number < state.official_move_number || null) &&
-                        <span>
-                            <button className="sm primary bold" onClick={this.goban_setModeDeferredPlay}>{_("Back to Game")}</button>
-                        </span>
-                    }
-                    
-                    {(state.mode === "analyze" && !this.goban.engine.config.original_sgf || null) &&
-                        <span>
-                            <button className="sm primary bold" onClick={this.goban_setModeDeferredPlay}>{_("Back to Game")}</button>
-                            <button className="sm primary bold pass-button" onClick={this.analysis_pass}>{_("Pass")}</button> 
-                        </span>
-                    }
-
-                    {(state.mode === "score estimation" || null) &&
-                        <span>
-                            <button className="sm primary bold" onClick={this.stopEstimatingScore}>{_("Back to Game")}</button>
-                        </span>
-                    }
-
-                    {/* (this.state.view_mode === 'portrait' || null) && <i onClick={this.togglePortraitTab} className={'tab-icon fa fa-commenting'}/> */}
-                </div>
-                {/* }}} */}
                 {((state.phase === "play" && state.mode === "play" && this.state.paused && this.goban.engine.pause_control && this.goban.engine.pause_control.paused) || null) &&  /* {{{ */
                     <div className="pause-controls">
                         <h3>{_("Game Paused")}</h3>
@@ -1866,7 +1887,7 @@ export class Game extends OGSComponent<GameProperties, any> {
                           popover-placement="left"
                        ></i>
                        */}
-                      
+
                        { null &&   /* just going to disable this for now, no one cares I don't think */
                            (this.state.rules === "japanese" || this.state.rules === "korean" || null) &&
                            <div style={{paddingTop: "2rem", paddingBottom: "2rem", textAlign: "center"}}>
@@ -1960,7 +1981,13 @@ export class Game extends OGSComponent<GameProperties, any> {
                     {this.frag_analyze_button_bar()}
 
                     <div className="space-around">
-                        <button className="sm primary bold pass-button" onClick={this.analysis_pass}>{_("Pass")}</button> 
+                        <button className="sm primary bold pass-button" onClick={this.analysis_pass}>{_("Pass")}</button>
+                        {(this.state.review_controller_id && this.state.review_controller_id !== user.id) &&
+                            this.state.review_out_of_sync &&
+                            <button className="sm" onClick={this.syncToCurrentReviewMove}>
+                                {pgettext("Synchronize to current review position", "Sync")} <i className='fa fa-refresh'/>
+                            </button>
+                        }
                     </div>
 
                     <Resizable id="move-tree-container" className="vertically-resizable" onResize={this.handleMoveTreeResize}>
@@ -2127,37 +2154,38 @@ export class Game extends OGSComponent<GameProperties, any> {
                           }
                       </div>
 
-                      {(!portrait_game_mode && (goban.engine.players[color] && goban.engine.players[color].rank !== -1) || null) &&
+                      {((goban.engine.players[color] && goban.engine.players[color].rank !== -1) || null) &&
                           <div className="player-name-container">
                              <Player user={goban.engine.players[color]}/>
                           </div>
                       }
 
-                      {(!portrait_game_mode && (!goban.engine.players[color]) || null) &&
+                      {((!goban.engine.players[color]) || null) &&
                           <span className="player-name-plain">{color === "black" ? _("Black") : _("White")}</span>
                       }
 
 
-                      {(!portrait_game_mode || null) &&
-                          <div className="score-container" onMouseEnter={this.score_popups[`popup_${color}`]} onMouseLeave={this.score_popups[`hide_${color}`]}>
-                              {(goban.engine.phase === "finished" || goban.engine.phase === "stone removal" || null) &&
-                                  <div className="points">
-                                      {interpolate(_("{{total}} points"), {"total": this.state.score[color].total})}
-                                  </div>
-                              }
-                              {(goban.engine.phase !== "finished" && goban.engine.phase !== "stone removal" || null) &&
-                                  <div className="captures">
-                                      {interpolate(_("{{captures}} captures"), {"captures": this.state.score[color].prisoners})}
-                                  </div>
-                              }
-                              {((goban.engine.phase !== "finished" && goban.engine.phase !== "stone removal") || null) &&
-                                  <div className="komi">
-                                    {this.state.score[color].komi === 0 ? "" : `+ ${parseFloat(this.state.score[color].komi).toFixed(1)}`}
-                                  </div>
-                              }
-                              <div id={`${color}-score-details`} className="score-details"/>
-                          </div>
-                      }
+                      <div className="score-container" onMouseEnter={this.score_popups[`popup_${color}`]} onMouseLeave={this.score_popups[`hide_${color}`]}>
+                          {((goban.engine.phase === "finished" || goban.engine.phase === "stone removal" || null) && goban.mode !== "analyze" &&
+                            goban.engine.outcome !== "Timeout" && goban.engine.outcome !== "Resignation" && goban.engine.outcome !== "Cancellation") &&
+                              <div className="points">
+                                  {interpolate(_("{{total}} points"), {"total": this.state.score[color].total})}
+                              </div>
+                          }
+                          {((goban.engine.phase !== "finished" && goban.engine.phase !== "stone removal" || null) || goban.mode === "analyze" ||
+                            goban.engine.outcome === "Timeout" || goban.engine.outcome === "Resignation" || goban.engine.outcome === "Cancellation") &&
+                              <div className="captures">
+                                  {interpolate(_("{{captures}} captures"), {"captures": this.state.score[color].prisoners})}
+                              </div>
+                          }
+                          {((goban.engine.phase !== "finished" && goban.engine.phase !== "stone removal" || null) || goban.mode === "analyze" ||
+                            goban.engine.outcome === "Timeout" || goban.engine.outcome === "Resignation" || goban.engine.outcome === "Cancellation") &&
+                              <div className="komi">
+                                {this.state.score[color].komi === 0 ? "" : `+ ${parseFloat(this.state.score[color].komi).toFixed(1)}`}
+                              </div>
+                          }
+                          <div id={`${color}-score-details`} className="score-details"/>
+                      </div>
                   </div>
               ); })}
             </div>
@@ -2201,7 +2229,7 @@ export class Game extends OGSComponent<GameProperties, any> {
                           }
                     </span>
                 }
-                  
+
                     <span className="controls">
                         <span onClick={this.nav_first} className="move-control"><i className="fa fa-fast-backward"></i></span>
                         <span onClick={this.nav_prev_10} className="move-control"><i className="fa fa-backward"></i></span>
@@ -2662,8 +2690,23 @@ export class GameChatLine extends React.Component<GameChatLineProperties, any> {
                                 this.props.gameview.last_variation_number = Math.max(v, this.props.gameview.last_variation_number);
                             }
 
+                            let onLeave = () => {
+                                if (this.props.gameview.in_pushed_analysis) {
+                                    this.props.gameview.in_pushed_analysis = false;
+                                    this.props.gameview.leave_pushed_analysis = null;
+                                    goban.engine.jumpTo(orig_move);
+                                    orig_move.marks = orig_marks;
+                                    goban.pen_marks = stashed_pen_marks;
+                                    if (goban.pen_marks.length === 0) {
+                                        goban.detachPenCanvas();
+                                    }
+                                    goban.redraw();
+                                }
+                            };
+
                             let onEnter = () => {
                                 this.props.gameview.in_pushed_analysis = true;
+                                this.props.gameview.leave_pushed_analysis = onLeave;
                                 let turn = "branch_move" in body ? body.branch_move - 1 : body.from; /* branch_move exists in old games, and was +1 from our current counting */
                                 let moves = body.moves;
 
@@ -2683,18 +2726,6 @@ export class GameChatLine extends React.Component<GameChatLineProperties, any> {
                                 }
 
                                 goban.redraw();
-                            };
-                            let onLeave = () => {
-                                if (this.props.gameview.in_pushed_analysis) {
-                                    this.props.gameview.in_pushed_analysis = false;
-                                    goban.engine.jumpTo(orig_move);
-                                    orig_move.marks = orig_marks;
-                                    goban.pen_marks = stashed_pen_marks;
-                                    if (goban.pen_marks.length === 0) {
-                                        goban.detachPenCanvas();
-                                    }
-                                    goban.redraw();
-                                }
                             };
 
                             let onClick = () => {
