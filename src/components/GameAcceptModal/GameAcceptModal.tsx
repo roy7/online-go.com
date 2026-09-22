@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,112 +16,97 @@
  */
 
 import * as React from "react";
-import {_, pgettext, interpolate} from "translate";
-import {post, get} from "requests";
-import {openModal, Modal} from "components";
-import {timeControlDescription} from "TimeControl";
-import {Player} from "Player";
-import {errorAlerter} from "misc";
+import { _ } from "@/lib/translate";
+import { post } from "@/lib/requests";
+import { openModal, Modal } from "@/components/Modal";
+import { Player, PlayerObjectType } from "@/components/Player";
+import { errorAlerter } from "@/lib/misc";
+import { alert } from "@/lib/swal_config";
+import { ChallengeDetailsReviewPane } from "../ChallengeDetailsReviewPane";
+import { Challenge } from "@/lib/challenge_utils";
+import "./GameAcceptModal.css";
 
-declare var swal;
+interface Events {}
 
 interface GameAcceptModalProperties {
-    challenge: any;
-    onAccept: (challenge) => void;
+    challenge: Challenge;
+    onAccept: (challenge: Challenge) => void;
     // id?: any,
     // user?: any,
     // callback?: ()=>any,
 }
 
-
-export class GameAcceptModal extends Modal<GameAcceptModalProperties, {}> {
-    constructor(props) {
+export class GameAcceptModal extends Modal<Events, GameAcceptModalProperties, {}> {
+    constructor(props: GameAcceptModalProperties) {
         super(props);
     }
 
-    accept = () => {{{
-        swal({
+    accept = () => {
+        void alert.fire({
             text: "Accepting...",
-            type: "info",
+            icon: "info",
             showCancelButton: false,
             showConfirmButton: false,
             allowEscapeKey: false,
         });
 
         post(`challenges/${this.props.challenge.challenge_id}/accept`, {})
-        .then(() => {
-            swal.close();
-            this.close();
-            this.props.onAccept(this.props.challenge);
-        })
-        .catch((err) => {
-            swal.close();
-            errorAlerter(err);
-        });
-    }}}
+            .then(() => {
+                alert.close();
+                this.close();
+                this.props.onAccept(this.props.challenge);
+            })
+            .catch((err) => {
+                alert.close();
+                errorAlerter(err);
+            });
+    };
 
     render() {
-        let challenge = this.props.challenge;
-        let time_control_description = timeControlDescription(challenge.time_control_parameters);
-        let player_color = _(challenge.challenger_color);
-
-        console.log(challenge);
-
-        if (challenge.challenger_color === "black")          { player_color = _("White");     }
-        else if (challenge.challenger_color === "white")     { player_color = _("Black");     }
-        else if (challenge.challenger_color === "automatic") { player_color = _("Automatic"); }
-        else if (challenge.challenger_color === "random")    { player_color = _("Random");    }
+        const challenge = this.props.challenge;
+        const challenger_details: PlayerObjectType = {
+            id: challenge.user_id,
+            username: challenge.username,
+            pro: !!challenge.pro,
+            rank: challenge.rank,
+        };
 
         return (
-          <div className="Modal GameAcceptModal" ref="modal">
-              <div className="header">
-                  <div>
-                      <h2>
-                          <Player icon iconSize={32} user={challenge}/>
-                      </h2>
-                      <h4>
-                          {challenge.name}
-                      </h4>
-                  </div>
-              </div>
-              <div className="body">
-                <p>{time_control_description}</p>
-                <hr/>
-                <dl className="horizontal">
-                  <dt>{_("Your color")}</dt><dd>{player_color}</dd>
-                  <dt>{_("Ranked")}</dt><dd>{challenge.ranked ? _("Yes") : _("No")}</dd>
-                  <dt>{_("Handicap")}</dt><dd>{handicapText(challenge.handicap)}</dd>
-                  <dt>{_("Komi")}</dt><dd>{challenge.komi || _("Automatic")}</dd>
-                  <dt>{_("Board Size")}</dt><dd>{challenge.width}x{challenge.height}</dd>
-                  <dt>{_("In-game analysis")}</dt><dd>{yesno(!challenge.disable_analysis)}</dd>
-                      {(challenge.time_per_move > 3600 || null) && <dt>{_("Pause on weekends")}</dt>}
-                      {(challenge.time_per_move > 3600 || null) && <dd>{yesno(challenge.time_control_parameters.pause_on_weekends)}</dd>}
-                </dl>
-              </div>
-              <div className="buttons">
-                  <button onClick={this.close}>{_("Close")}</button>
-                  <button onClick={this.accept} className="primary">{_("Accept Game")}</button>
-              </div>
-          </div>
+            <div className="Modal GameAcceptModal">
+                <div className="header">
+                    <div>
+                        <h2>
+                            <Player icon iconSize={32} user={challenger_details} />
+                        </h2>
+                        <h4>{challenge.name}</h4>
+                    </div>
+                </div>
+                <div className="body">
+                    <ChallengeDetailsReviewPane challenge={challenge} />
+                </div>
+                <div className="buttons">
+                    <button onClick={this.close}>{_("Close")}</button>
+                    <button onClick={this.accept} className="primary">
+                        {_("Accept Game")}
+                    </button>
+                </div>
+            </div>
         );
     }
 }
 
-
-export function openGameAcceptModal(challenge): Promise<any> {
-    console.log(challenge);
-
-    return new Promise((resolve, reject) => {
-        openModal(<GameAcceptModal challenge={challenge} onAccept={resolve} />);
+export function openGameAcceptModal(challenge: Challenge): Promise<any> {
+    return new Promise((resolve) => {
+        openModal(<GameAcceptModal challenge={challenge} onAccept={resolve} fastDismiss />);
     });
 }
 
-export function handicapText(handicap) { /* {{{ */
-    if (handicap < 0)   { return _("Auto"); }
-    if (handicap === 0) { return _("None"); }
+export function handicapText(handicap: number) {
+    if (handicap < 0) {
+        return _("Auto");
+    }
+    if (handicap === 0) {
+        return _("None");
+    }
     return handicap;
-} /* }}} */
-function yesno(tf: boolean) {{{
-    return tf ? _("Yes") : _("No");
-}}}
-
+}

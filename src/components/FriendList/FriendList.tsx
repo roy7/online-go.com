@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,78 +16,171 @@
  */
 
 import * as React from "react";
-import {_, pgettext, interpolate} from "translate";
-import {errorAlerter} from "misc";
-import online_status from "online_status";
-import data from "data";
-import {post, get, abort_requests_in_flight} from "requests";
-import {Player} from "Player";
+import { _ } from "@/lib/translate";
+import online_status from "@/lib/online_status";
+import * as data from "@/lib/data";
+import * as preferences from "@/lib/preferences";
+import { Player } from "@/components/Player";
+import cached from "@/lib/cached";
+import { PlayerCacheEntry } from "@/lib/player_cache";
+import { post } from "@/lib/requests";
+import { player_is_ignored } from "../BlockPlayer";
+import "./FriendList.css";
+export function FriendList() {
+    const [friends, setFriends] = React.useState<PlayerCacheEntry[]>([]);
+    const [showOfflineFriends, setShowOfflineFriends] = React.useState(
+        preferences.get("show-offline-friends"),
+    );
+    const [invitations, setInvitations] = React.useState<rest_api.FriendInvitations>([]);
+    const [notifyOnDecline, setNotifyOnDecline] = React.useState(false);
 
-
-interface FriendListProperties {
-    // id?: any,
-    // user?: any,
-    // callback?: ()=>any,
-}
-
-export class FriendList extends React.PureComponent<{}, any> {
-    constructor(props) {
-        super(props);
-        this.state = {
-            friends: [],
-            resolved: false
+    React.useEffect(() => {
+        const updateInvitations = (inv?: rest_api.FriendInvitations) => {
+            if (inv) {
+                setInvitations(inv);
+            }
         };
-    }
 
-    updateFriends = (friends) => {
-        this.setState({
-            friends: this.sortFriends(friends),
-            resolved: true
-        });
-    }
+        data.watch(cached.friend_invitations, updateInvitations);
 
-    componentDidMount() {{{
-        data.watch("friends", this.updateFriends); /* this is managed by our FriendIndicator */
-        online_status.event_emitter.on("users-online-updated", this.resortFriends);
-    }}}
-    componentWillUnmount() {{{
-        online_status.event_emitter.off("users-online-updated", this.resortFriends);
-    }}}
-    resortFriends = () => {
-        this.setState({"friends": this.sortFriends(this.state.friends)});
-    }
-    sortFriends(lst) {{{
-        let ret = [].concat(lst);
+        return () => {
+            data.unwatch(cached.friend_invitations, updateInvitations);
+        };
+    }, []);
+
+    const sortFriends = React.useCallback((lst: PlayerCacheEntry[]) => {
+        const ret = [...lst];
         ret.sort((a, b) => {
-            let a_online = online_status.is_player_online(a.id);
-            let b_online = online_status.is_player_online(b.id);
+            const a_online = online_status.is_player_online(a.id);
+            const b_online = online_status.is_player_online(b.id);
             if (a_online && !b_online) {
                 return -1;
             }
             if (b_online && !a_online) {
                 return 1;
             }
+            if (!a.username) {
+                return 1;
+            }
+            if (!b.username) {
+                return -1;
+            }
             return a.username.localeCompare(b.username);
         });
         return ret;
-    }}}
-    render() {
-        if (!this.state.resolved) {
-            return null;
-        }
+    }, []);
 
-        return (
-            <div className="FriendList">
-                {this.state.friends.map((friend) => (
-                    <div key={friend.id} >
-                        <Player user={friend} online rank />
-                    </div>
-                ))}
-                {(this.state.friends.length === 0 || null) &&
-                    null
-                }
-            </div>
+    const updateFriends = React.useCallback(
+        (newFriends: PlayerCacheEntry[]) => {
+            setFriends(sortFriends(newFriends));
+        },
+        [sortFriends],
+    );
+
+    const resortFriends = React.useCallback(() => {
+        setFriends((friends) => sortFriends(friends));
+    }, [sortFriends]);
+
+    React.useEffect(() => {
+        data.watch(cached.friends, updateFriends);
+        online_status.event_emitter.on("users-online-updated", resortFriends);
+
+        return () => {
+            data.unwatch(cached.friends, updateFriends);
+            online_status.event_emitter.off("users-online-updated", resortFriends);
+        };
+    }, [updateFriends, resortFriends]);
+
+    const handleShowOfflineFriends = (ev: React.ChangeEvent<HTMLInputElement>) => {
+        preferences.set("show-offline-friends", ev.target.checked);
+        setShowOfflineFriends(ev.target.checked);
+        ev.stopPropagation();
+    };
+
+    const eat = (ev: React.MouseEvent) => {
+        ev.stopPropagation();
+    };
+
+    const removeInvitation = (invitation: rest_api.FriendInvitations[number]) => {
+        data.set(
+            cached.friend_invitations,
+            invitations.filter((inv) => inv.from_user.id !== invitation.from_user.id),
         );
-    }
-}
+    };
 
+    const acceptInvite = (invitation: rest_api.FriendInvitations[number]) => {
+        removeInvitation(invitation);
+        post("me/friends/invitations/", { from_user: invitation.from_user.id })
+            .then(() => 0)
+            .catch(() => 0);
+    };
+
+    const rejectInvite = (invitation: rest_api.FriendInvitations[number]) => {
+        removeInvitation(invitation);
+        post("me/friends/invitations/", {
+            from_user: invitation.from_user.id,
+            delete: true,
+            notify_requestor: notifyOnDecline,
+        })
+            .then(() => 0)
+            .catch(() => 0);
+    };
+
+    return (
+        <div className="FriendList">
+            <div className="show-offline">
+                <input
+                    id="show-offline-friends"
+                    type="checkbox"
+                    checked={showOfflineFriends}
+                    onClick={eat}
+                    onChange={handleShowOfflineFriends}
+                />
+                <label onClick={eat} htmlFor="show-offline-friends">
+                    {_("Show offline")}
+                </label>
+            </div>
+            {invitations.length > 0 && (
+                <div className="notify-on-decline">
+                    <input
+                        id="notify-on-decline"
+                        type="checkbox"
+                        checked={notifyOnDecline}
+                        onClick={eat}
+                        onChange={(ev) => setNotifyOnDecline(ev.target.checked)}
+                    />
+                    <label onClick={eat} htmlFor="notify-on-decline">
+                        {_("Notify when declining")}
+                    </label>
+                </div>
+            )}
+            {invitations.map((invitation) => {
+                if (player_is_ignored(invitation.from_user.id)) {
+                    return null;
+                }
+
+                return (
+                    <div className="friend-invitation" key={invitation.from_user.id}>
+                        <i className="fa fa-times" onClick={() => rejectInvite(invitation)} />
+                        <i className="fa fa-check" onClick={() => acceptInvite(invitation)} />
+                        <Player
+                            user={invitation.from_user}
+                            online
+                            rank
+                            noextracontrols
+                            shownotesindicator
+                        />
+                    </div>
+                );
+            })}
+            {friends.map(
+                (friend: PlayerCacheEntry) =>
+                    (online_status.is_player_online(friend.id) || showOfflineFriends) && (
+                        <div className="friend-entry" key={friend.id}>
+                            <Player user={friend} online rank noextracontrols shownotesindicator />
+                        </div>
+                    ),
+            )}
+        </div>
+    );
+}

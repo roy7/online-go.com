@@ -1,0 +1,693 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+import * as React from "react";
+import { useSearchParams } from "react-router-dom";
+import { _, interpolate, pgettext } from "@/lib/translate";
+import * as data from "@/lib/data";
+import { Goban, ConditionalMoveTree } from "goban";
+import { challengeRematch } from "@/components/ChallengeModal";
+import { Link } from "react-router-dom";
+import { Resizable } from "@/components/Resizable";
+import { ChatMode } from "./GameChat";
+import { close_all_popovers } from "@/lib/popover";
+import { setExtraActionCallback, Player } from "@/components/Player";
+import { GameActionArea } from "./GameActionArea";
+import {
+    generateGobanHook,
+    useUserIsParticipant,
+    useVariationName,
+    useSelectedChatLog,
+    useAnnulled,
+    useMode,
+    usePhase,
+    useZenMode,
+    useStashedConditionalMoves,
+    useNeedsSealing,
+    useViewMode,
+} from "./GameHooks";
+import { useGobanController } from "./goban_context";
+import { is_valid_url } from "@/lib/url_validation";
+import { ConditionalMoveTreeDisplay } from "./ConditionalMoveTreeDisplay";
+import { useUser } from "@/lib/hooks";
+import { AntiGrief } from "./AntiGrief";
+import { GobanAnalyzeButtonBar } from "@/components/GobanAnalyzeButtonBar/GobanAnalyzeButtonBar";
+import { EstimateScore } from "./fragments";
+import "./PlayControls.css";
+
+const MAX_SEALING_LOCATIONS_TO_LIST = 5;
+
+interface PlayControlsProps {
+    annulment_reason: null | rest_api.AnnulmentReason;
+}
+
+const useConditionalMoveTree = generateGobanHook(
+    (goban) => goban?.conditional_tree,
+    ["mode", "conditional-moves.updated"],
+);
+
+export function PlayControls({ annulment_reason }: PlayControlsProps): React.ReactElement {
+    const user = useUser();
+    const goban_controller = useGobanController();
+    const goban = goban_controller.goban;
+    const engine = goban.engine;
+    const [searchParams] = useSearchParams();
+    const return_param = searchParams.get("return");
+    const return_url = return_param && is_valid_url(return_param) ? return_param : null;
+    const needs_sealing = useNeedsSealing(goban);
+    const need_to_seal = needs_sealing && needs_sealing.length > 0;
+    const is_portrait = useViewMode(goban_controller) === "portrait";
+    const annulled = useAnnulled(goban_controller);
+    const onVariationKeyPress = useOnVariationKeyPress();
+    const zen_mode = useZenMode(goban_controller);
+    const variation_name = useVariationName(goban_controller);
+    const selected_chat_log = useSelectedChatLog(goban_controller);
+    const phase = usePhase(goban);
+    const stashed_conditional_moves = useStashedConditionalMoves(goban_controller);
+
+    const paused = usePaused(goban);
+    const conditional_moves = useConditionalMoveTree(goban);
+    const user_is_player = useUserIsParticipant(goban);
+    const mode = useMode(goban);
+
+    const goban_setMode_play = () => {
+        goban.setMode("play");
+        if (stashed_conditional_moves) {
+            goban.setConditionalTree(stashed_conditional_moves);
+            goban_controller.setStashedConditionalMoves(null);
+        }
+    };
+    const goban_resumeGame = () => {
+        goban.resumeGame();
+    };
+    const goban_jumpToLastOfficialMove = () => {
+        goban.jumpToLastOfficialMove();
+    };
+    const acceptConditionalMoves = () => {
+        goban_controller.setStashedConditionalMoves(null);
+        goban.saveConditionalMoves();
+        goban.setMode("play");
+    };
+
+    const rematch = () => {
+        try {
+            (document.activeElement as HTMLElement)?.blur();
+        } catch (e) {
+            console.error(e);
+        }
+
+        challengeRematch(
+            goban,
+            data.get("user").id === goban.engine.players.black.id
+                ? goban.engine.players.white
+                : goban.engine.players.black,
+            goban.engine.config,
+        );
+    };
+
+    return (
+        <div className="PlayControls">
+            {!is_portrait && <GameActionArea />}
+            {annulled && (
+                <div className="annulled-indicator">
+                    {pgettext("Displayed to the user when the game is annulled", "Game Annulled")}
+                    <i className="fa fa-question-circle" />
+                    <AnnulmentReason
+                        reason={
+                            annulment_reason ||
+                            (engine.outcome === "Cancellation" ? { cancellation: true } : null) ||
+                            (engine.outcome === "Timeout" &&
+                            engine.last_official_move.move_number < 20
+                                ? { premature_timeout: true }
+                                : null)
+                        }
+                    />
+                </div>
+            )}
+            {((phase === "play" &&
+                mode === "play" &&
+                paused &&
+                goban.pause_control &&
+                goban.pause_control.paused) ||
+                null) && (
+                <div className="pause-controls">
+                    <h3>{_("Game Paused")}</h3>
+                    {(user_is_player || user.is_moderator || null) && (
+                        <button className="info" onClick={goban_resumeGame}>
+                            {_("Resume")}
+                        </button>
+                    )}
+                    <div>
+                        {engine.players.black.id ===
+                            goban.pause_control!.paused?.pausing_player_id ||
+                        (engine.rengo &&
+                            engine.rengo_teams &&
+                            engine.rengo_teams.black
+                                .map((p) => p.id)
+                                .includes(goban.pause_control?.paused?.pausing_player_id ?? 0))
+                            ? interpolate(_("{{pauses_left}} pauses left for Black"), {
+                                  pauses_left: goban.pause_control?.paused?.pauses_left,
+                              })
+                            : interpolate(_("{{pauses_left}} pauses left for White"), {
+                                  pauses_left: goban.pause_control?.paused?.pauses_left,
+                              })}
+                    </div>
+                </div>
+            )}
+
+            {((goban.pause_control && goban.pause_control.moderator_paused && user.is_moderator) ||
+                null) && (
+                <div className="pause-controls">
+                    <h3>{_("Paused by Moderator")}</h3>
+                    <button className="info" onClick={goban_resumeGame}>
+                        {_("Resume")}
+                    </button>
+                </div>
+            )}
+            {(phase === "finished" || null) && (
+                <div className="analyze-mode-buttons">
+                    {" "}
+                    {/* not really analyze mode, but equivalent button position and look*/}
+                    {((user_is_player && mode !== "score estimation" && !engine.rengo) || null) && (
+                        <button onClick={rematch} className="primary">
+                            {_("Rematch")}
+                        </button>
+                    )}
+                    {((!zen_mode && goban_controller.review_list.length > 0) || null) && (
+                        <div className="review-list">
+                            <h3>{_("Reviews")}</h3>
+                            {goban_controller.review_list.map((review, idx) => (
+                                <div key={idx}>
+                                    <Player user={review.owner} icon></Player> -{" "}
+                                    <Link to={`/review/${review.id}`}>{_("view")}</Link>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {(return_url || null) && (
+                        <div className="return-url">
+                            <a href={return_url as string} rel="noopener">
+                                {interpolate(
+                                    pgettext(
+                                        "Link to where the user came from",
+                                        "Return to {{url}}",
+                                    ),
+                                    {
+                                        url: return_url,
+                                    },
+                                )}
+                            </a>
+                        </div>
+                    )}
+                </div>
+            )}
+            {(phase === "stone removal" || null) && (
+                <div className="stone-removal-controls">
+                    {need_to_seal && (
+                        <div className="needs-sealing">
+                            {_(
+                                "The highlighted locations may need to be sealed before the game can be scored correctly",
+                            )}
+                            <div className="needs-sealing-coordinates">
+                                <span className="needs-sealing-box" />
+                                {needs_sealing
+                                    .slice(0, MAX_SEALING_LOCATIONS_TO_LIST)
+                                    .map((loc) => goban.engine.prettyCoordinates(loc.x, loc.y))
+                                    .join(", ")}
+                                {needs_sealing.length > MAX_SEALING_LOCATIONS_TO_LIST && (
+                                    <span>...</span>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="explanation">
+                        {_(
+                            "In this phase, both players select and agree upon which groups should be considered captured and should be removed for the purposes of scoring.",
+                        )}
+                    </div>
+                </div>
+            )}
+            <AntiGrief />
+            {(mode === "conditional" || null) && (
+                <div className="conditional-move-planner">
+                    <div className="buttons">
+                        <button className="primary" onClick={acceptConditionalMoves}>
+                            {_("Accept Conditional Moves")}
+                        </button>
+                        <button onClick={() => goban.pass()}>{_("Pass")}</button>
+                        <button onClick={goban_setMode_play}>{_("Cancel")}</button>
+                    </div>
+                    <div className="ctrl-conditional-tree">
+                        <hr />
+                        <span className="move-current" onClick={goban_jumpToLastOfficialMove}>
+                            {_("Current Move")}
+                        </span>
+                        {(conditional_moves || null) && (
+                            <ConditionalMoveTreeDisplay
+                                tree={conditional_moves as ConditionalMoveTree}
+                                conditional_path=""
+                            />
+                        )}
+                    </div>
+                </div>
+            )}
+            {(mode === "analyze" || null) && (
+                <div>
+                    <AnalyzeButtonBar />
+
+                    <Resizable
+                        id="move-tree-container"
+                        className="vertically-resizable"
+                        ref={goban_controller.setMoveTreeContainer}
+                    />
+
+                    {(!zen_mode || null) && (
+                        <div style={{ padding: "0.5em" }}>
+                            <div className="input-group">
+                                <input
+                                    type="text"
+                                    className={`form-control ${selected_chat_log}`}
+                                    placeholder={_("Variation name...")}
+                                    value={variation_name}
+                                    onChange={goban_controller.updateVariationName}
+                                    onKeyDown={onVariationKeyPress}
+                                    disabled={user.anonymous}
+                                />
+                                <ShareAnalysisButton
+                                    selected_chat_log={selected_chat_log}
+                                    isUserAnonymous={user.anonymous}
+                                    shareAnalysis={goban_controller.shareAnalysis}
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+export function AnalyzeButtonBar(): React.ReactElement {
+    const goban_controller = useGobanController();
+    return <GobanAnalyzeButtonBar controller={goban_controller} />;
+}
+
+interface ReviewControlsProps {
+    review_id: number;
+}
+
+const useReviewOwnerId = generateGobanHook(
+    (goban: Goban) => goban.review_owner_id,
+    ["review_owner_id"],
+);
+const useReviewControllerId = generateGobanHook(
+    (goban: Goban) => goban.review_controller_id,
+    ["review_controller_id"],
+);
+
+export function ReviewControls({ review_id }: ReviewControlsProps) {
+    const user = data.get("user");
+    const goban_controller = useGobanController();
+
+    const goban = goban_controller.goban;
+    const [in_pushed_analysis, set_in_pushed_analysis] = React.useState(
+        goban_controller.in_pushed_analysis,
+    );
+    const onVariationKeyPress = useOnVariationKeyPress();
+    const variation_name = useVariationName(goban_controller);
+    const selected_chat_log = useSelectedChatLog(goban_controller);
+    const mode = useMode(goban);
+
+    const [review_out_of_sync, set_review_out_of_sync] = React.useState(false);
+    React.useEffect(() => {
+        if (goban) {
+            const updateReviewOutOfSync = () => {
+                const engine = goban.engine;
+                set_review_out_of_sync(
+                    !!(
+                        engine.cur_move &&
+                        engine.cur_review_move &&
+                        engine.cur_move.id !== engine.cur_review_move.id
+                    ),
+                );
+            };
+            goban.on("cur_move", updateReviewOutOfSync);
+            goban.on("review.updated", updateReviewOutOfSync);
+            return () => {
+                goban.off("cur_move", updateReviewOutOfSync);
+                goban.off("review.updated", updateReviewOutOfSync);
+            };
+        }
+        return;
+    }, [goban]);
+
+    React.useEffect(() => {
+        if (goban) {
+            const engine = goban.engine;
+            set_review_out_of_sync(
+                !!(
+                    engine.cur_move &&
+                    engine.cur_review_move &&
+                    engine.cur_move.id !== engine.cur_review_move.id
+                ),
+            );
+        }
+    }, [goban, in_pushed_analysis]);
+
+    const review_owner_id = useReviewOwnerId(goban);
+    const review_controller_id = useReviewControllerId(goban);
+
+    React.useEffect(() => {
+        goban_controller.on("in_pushed_analysis", set_in_pushed_analysis);
+        return () => {
+            goban_controller.off("in_pushed_analysis", set_in_pushed_analysis);
+        };
+    }, [goban_controller]);
+
+    React.useEffect(() => {
+        const renderExtraPlayerActions = (player_id: number): React.ReactElement | null => {
+            const user = data.get("user");
+            if (
+                review_id &&
+                goban &&
+                (goban.review_controller_id === user.id || goban.review_owner_id === user.id)
+            ) {
+                let is_owner: any = null;
+                let is_controller: any = null;
+                if (goban.review_owner_id === player_id) {
+                    is_owner = (
+                        <div style={{ fontStyle: "italic" }}>
+                            {_("Owner") /* translators: Review owner */}
+                        </div>
+                    );
+                }
+                if (goban.review_controller_id === player_id) {
+                    is_controller = (
+                        <div style={{ fontStyle: "italic" }}>
+                            {_("Controller") /* translators: Review controller */}
+                        </div>
+                    );
+                }
+
+                const give_control = (
+                    <button
+                        className="xs"
+                        onClick={() => {
+                            goban.giveReviewControl(player_id);
+                            close_all_popovers();
+                        }}
+                    >
+                        {
+                            _(
+                                "Give Control",
+                            ) /* translators: Give control in review or on a demo board */
+                        }
+                    </button>
+                );
+
+                if (player_id === goban.review_owner_id) {
+                    return (
+                        <div>
+                            {is_owner}
+                            {is_controller}
+                            <div className="actions">{give_control}</div>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div>
+                        {is_owner}
+                        {is_controller}
+                        <div className="actions">{give_control}</div>
+                    </div>
+                );
+            }
+            return null;
+        };
+        setExtraActionCallback(renderExtraPlayerActions);
+    }, [goban]);
+
+    const [move_text, set_move_text] = React.useState<string>();
+    const updateMoveText = (ev: React.ChangeEvent<HTMLTextAreaElement>) => {
+        set_move_text(ev.target.value);
+        goban.syncReviewMove(undefined, ev.target.value);
+    };
+    React.useEffect(() => {
+        const sync_move_text = () => set_move_text(goban.engine.cur_move?.text || "");
+        goban.on("load", sync_move_text);
+        goban.on("cur_move", sync_move_text);
+    }, [goban]);
+
+    const syncToCurrentReviewMove = () => {
+        if (goban.engine.cur_review_move) {
+            goban.engine.jumpTo(goban.engine.cur_review_move);
+        } else {
+            setTimeout(syncToCurrentReviewMove, 50);
+        }
+    };
+    React.useEffect(() => {
+        goban.on("review.sync-to-current-move", syncToCurrentReviewMove);
+    }, [goban]);
+
+    return (
+        <div className="PlayControls">
+            <div className="game-state">
+                {(mode === "analyze" || null) && (
+                    <div>
+                        {_("Review by")}: <Player user={review_owner_id as number} />
+                        {((review_controller_id && review_controller_id !== review_owner_id) ||
+                            null) && (
+                            <div>
+                                {_("Review controller")}:{" "}
+                                <Player user={review_controller_id as number} />
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {(mode === "score estimation" || null) && (
+                    <div>
+                        <EstimateScore />
+                    </div>
+                )}
+            </div>
+            {(mode === "analyze" || null) && (
+                <div>
+                    <AnalyzeButtonBar />
+
+                    <div className="space-around">
+                        {review_controller_id &&
+                            review_controller_id !== user.id &&
+                            review_out_of_sync &&
+                            !in_pushed_analysis && (
+                                <button className="sm" onClick={syncToCurrentReviewMove}>
+                                    {pgettext("Synchronize to current review position", "Sync")}{" "}
+                                    <i className="fa fa-refresh" />
+                                </button>
+                            )}
+                    </div>
+
+                    <Resizable
+                        id="move-tree-container"
+                        className="vertically-resizable"
+                        ref={goban_controller.setMoveTreeContainer}
+                    />
+
+                    <div className="move-comments">
+                        <textarea
+                            id="game-move-node-text"
+                            placeholder={_("Move comments...")}
+                            rows={5}
+                            className="form-control"
+                            value={move_text}
+                            disabled={review_controller_id !== data.get("user").id}
+                            onChange={updateMoveText}
+                        ></textarea>
+                    </div>
+
+                    <div style={{ padding: "0.5em" }}>
+                        <div className="input-group">
+                            <input
+                                type="text"
+                                className={`form-control ${selected_chat_log}`}
+                                placeholder={_("Variation name...")}
+                                value={variation_name}
+                                onChange={goban_controller.updateVariationName}
+                                onKeyDown={onVariationKeyPress}
+                                disabled={user.anonymous}
+                            />
+                            <button
+                                className="sm"
+                                type="button"
+                                disabled={user.anonymous}
+                                onClick={goban_controller.shareAnalysis}
+                            >
+                                {_("Share")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {(mode === "score estimation" || null) && (
+                <div className="analyze-mode-buttons">
+                    <span>
+                        <button
+                            className="sm primary bold"
+                            onClick={goban_controller.stopEstimatingScore}
+                        >
+                            {_("Back to Review")}
+                        </button>
+                    </span>
+                </div>
+            )}
+        </div>
+    );
+}
+
+interface ShareAnalysisButtonProperties {
+    selected_chat_log: ChatMode;
+    shareAnalysis: () => void;
+    isUserAnonymous: boolean;
+}
+
+function ShareAnalysisButton(props: ShareAnalysisButtonProperties): React.ReactElement {
+    const { selected_chat_log, isUserAnonymous, shareAnalysis } = props;
+    switch (selected_chat_log) {
+        case "malkovich":
+        case "personal":
+            return (
+                <button
+                    className={`sm ${selected_chat_log}`}
+                    type="button"
+                    disabled={isUserAnonymous}
+                    onClick={shareAnalysis}
+                >
+                    {_("Record")}
+                </button>
+            );
+        default:
+            return (
+                <button
+                    className="sm"
+                    type="button"
+                    disabled={isUserAnonymous}
+                    onClick={shareAnalysis}
+                >
+                    {_("Share")}
+                </button>
+            );
+    }
+}
+
+const usePaused = generateGobanHook(
+    (goban) => goban!.pause_control && !!goban!.pause_control.paused,
+    ["paused"],
+);
+
+function AnnulmentReason({
+    reason,
+}: {
+    reason: rest_api.AnnulmentReason | { cancellation?: true; premature_timeout?: true } | null;
+}): React.ReactElement | null {
+    if (!reason) {
+        return null;
+    }
+
+    const arr: React.ReactElement[] = [];
+
+    for (const key in reason) {
+        switch (key) {
+            case "bot_game_abandoned":
+                // don't explicitly point out that we won't rate these games
+                break;
+            case "mass_correspondence_timeout_protection":
+                arr.push(
+                    <div key={key}>
+                        {_(
+                            "The server's mass correspondence timeout protection system has annulled this game. This system protects the rating system by annulling games when a player leaves the server for an extended period of time and as a result times out of many correspondence games. While unfortunate, this is a necessary behavior to protect the integrity of the rating system as a whole.",
+                        )}
+                    </div>,
+                );
+                break;
+            case "correspondence_disconnection":
+                // There was a bug that affected a few thousand games years
+                // ago. Since this is not actively used going forward, this is
+                // left untranslated.
+                arr.push(<div key={key}>Correspondence disconnection</div>);
+                break;
+            case "moderator_annulled":
+                arr.push(<div key={key}>{_("This game has been annulled by a moderator.")}</div>);
+                break;
+            case "bad_bot":
+                // "Bad bots" are bots that were decidedly horrible and harmful
+                // for the rating system. These primarily consist of older bots
+                // and is not generally used for modern games, hence the reason
+                // this is left untranslated.
+                arr.push(<div key={key}>Bad bot</div>);
+                break;
+            case "handicap_out_of_range":
+                // Some older games had extreme handicaps that were not within a meaningful range
+                // and so have been annulled. This is left untranslated as it's not applicable to
+                // modern games.
+                arr.push(<div key={key}>Handicap out of range</div>);
+                break;
+            case "cancellation":
+                arr.push(<div key={key}>{_("The game was canceled so will not be rated.")}</div>);
+                break;
+            case "premature_timeout":
+                arr.push(
+                    <div key={key}>
+                        {_("Not enough moves were made for this game to be rated.")}
+                    </div>,
+                );
+                break;
+            case "ai_cheating_remediation":
+                arr.push(
+                    <div key={key}>
+                        {_("This game has been annulled as part of AI cheating remediation.")}
+                    </div>,
+                );
+                break;
+            default:
+                arr.push(<div key={key}>{key}</div>);
+                break;
+        }
+    }
+
+    if (arr.length === 0) {
+        return null;
+    }
+
+    return <div className="annulment-reason">{arr}</div>;
+}
+
+function useOnVariationKeyPress() {
+    const goban_controller = useGobanController();
+    const handler = React.useCallback(
+        (ev: React.KeyboardEvent) => {
+            if (ev.key === "Enter") {
+                goban_controller.shareAnalysis();
+                return false;
+            }
+            return undefined;
+        },
+        [goban_controller],
+    );
+
+    return handler;
+}

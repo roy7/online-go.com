@@ -1,0 +1,69 @@
+/*
+ * Copyright (C)  Online-Go.com
+ * Copyright (C)  Benjamin P. Jones
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+import { GobanRenderer, GobanRendererConfig, createGoban, decodeMoves } from "goban";
+import React from "react";
+import { PersistentElement } from "../../components/PersistentElement";
+
+export function ScoringEventThumbnail({
+    config,
+    move_number,
+}: {
+    config: GobanRendererConfig;
+    move_number: number | undefined;
+}) {
+    const goban_div = React.useRef<HTMLDivElement>(
+        (() => {
+            const ret = document.createElement("div");
+            ret.className = "Goban";
+            return ret;
+        })(),
+    );
+    const goban = React.useRef<GobanRenderer | null>(null);
+
+    React.useEffect(() => {
+        goban.current = createGoban({
+            ...config,
+            board_div: goban_div.current,
+            server_socket: undefined,
+        });
+        const engine = goban.current.engine;
+        if (move_number != null) {
+            engine.jumpToOfficialMoveNumber(move_number);
+        }
+
+        // Apply the removed stones from the config before computing score
+        // This ensures the score computation uses the stones players marked as dead/alive,
+        // not just the current board position
+        if (config.removed) {
+            const removed_moves = decodeMoves(config.removed, engine.width, engine.height);
+            for (const move of removed_moves) {
+                engine.setRemoved(move.x, move.y, true, false);
+            }
+        }
+
+        const score = engine.computeScore();
+        goban.current?.showScores(score);
+
+        return () => {
+            goban.current?.destroy();
+        };
+    }, [config, move_number]);
+
+    return <PersistentElement className={"goban-thumbnail"} elt={goban_div.current} />;
+}

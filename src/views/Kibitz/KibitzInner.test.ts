@@ -1,0 +1,124 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+import type { GobanController } from "@/lib/GobanController";
+import { isCurrentGameBaseSnapshotUsable, isMainBoardSafeForReconnect } from "./KibitzInner";
+import type { KibitzCurrentGameBaseSnapshot } from "./kibitzCurrentGameBaseSnapshotTypes";
+import type { KibitzWatchedGame } from "@/models/kibitz";
+
+describe("isCurrentGameBaseSnapshotUsable", () => {
+    const liveGame = {
+        game_id: 1,
+        move_number: 0,
+        live: true,
+    } as KibitzWatchedGame;
+    const nonLiveGame = {
+        game_id: 1,
+        move_number: 0,
+        live: false,
+    } as KibitzWatchedGame;
+
+    it("rejects a live root snapshot from the visible board", () => {
+        const snapshot = {
+            gameId: 1,
+            roomId: "r",
+            trunkTailMoveNumber: 0,
+            moveTreeId: 1,
+            movePath: "",
+            source: "main-board",
+            config: {},
+        } as KibitzCurrentGameBaseSnapshot;
+
+        expect(isCurrentGameBaseSnapshotUsable(snapshot, liveGame, "r")).toBe(false);
+    });
+
+    it("accepts a non-live root snapshot", () => {
+        const snapshot = {
+            gameId: 1,
+            roomId: "r",
+            trunkTailMoveNumber: 0,
+            moveTreeId: 1,
+            movePath: "",
+            source: "main-board",
+            config: {},
+        } as KibitzCurrentGameBaseSnapshot;
+
+        expect(isCurrentGameBaseSnapshotUsable(snapshot, nonLiveGame, "r")).toBe(true);
+    });
+
+    it("accepts a live root snapshot only when fetched game-details prove zero moves", () => {
+        const snapshot = {
+            gameId: 1,
+            roomId: "r",
+            trunkTailMoveNumber: 0,
+            moveTreeId: 1,
+            movePath: "",
+            source: "game-details",
+            fetchedMoveCount: 0,
+            config: {},
+        } as KibitzCurrentGameBaseSnapshot;
+
+        expect(isCurrentGameBaseSnapshotUsable(snapshot, liveGame, "r")).toBe(true);
+    });
+});
+
+describe("isMainBoardSafeForReconnect", () => {
+    const liveGame = {
+        game_id: 1,
+        move_number: 0,
+        live: true,
+    } as KibitzWatchedGame;
+
+    it("blocks reconnects for a live root-only controller", () => {
+        expect(
+            isMainBoardSafeForReconnect({
+                mainBoardController: {} as GobanController,
+                currentGame: liveGame,
+                currentGameBaseSnapshotTailMoveNumber: 0,
+                mainBoardOfficialTailMoveNumber: 0,
+                mainBoardCurrentMoveNumber: 0,
+                mainBoardLastOfficialMoveNumber: 0,
+            }),
+        ).toBe(false);
+    });
+
+    it("allows reconnects once the official tail advances", () => {
+        expect(
+            isMainBoardSafeForReconnect({
+                mainBoardController: {} as GobanController,
+                currentGame: liveGame,
+                currentGameBaseSnapshotTailMoveNumber: 33,
+                mainBoardOfficialTailMoveNumber: 33,
+                mainBoardCurrentMoveNumber: 33,
+                mainBoardLastOfficialMoveNumber: 33,
+            }),
+        ).toBe(true);
+    });
+
+    it("blocks reconnects when the tail is fresh but the live position is still stale", () => {
+        expect(
+            isMainBoardSafeForReconnect({
+                mainBoardController: {} as GobanController,
+                currentGame: liveGame,
+                currentGameBaseSnapshotTailMoveNumber: 67,
+                mainBoardOfficialTailMoveNumber: 67,
+                mainBoardCurrentMoveNumber: 0,
+                mainBoardLastOfficialMoveNumber: 0,
+            }),
+        ).toBe(false);
+    });
+});

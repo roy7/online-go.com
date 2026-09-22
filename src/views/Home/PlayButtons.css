@@ -1,0 +1,76 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+.PlayButtons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex-shrink: 0;
+
+    .play-label {
+        display: inline-flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0rem;
+        width: 100%;
+
+        .play-label-play {
+            line-height: 1;
+            font-weight: 600;
+            font-size: 1.5rem;
+        }
+
+        .play-label-details {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            line-height: 1.2;
+            color: var(--colored-background-fg-dim);
+            margin-left: 1.5rem;
+
+            .play-label-time,
+            .play-label-size {
+                font-size: 0.9rem;
+            }
+        }
+    }
+
+    .review-last-game {
+        margin-top: 2rem;
+    }
+
+    .play-button {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: 3rem;
+        padding: 1rem;
+        font-size: 1.3rem;
+        border: 1px solid var(--shade3);
+        border-radius: 0.25rem;
+        text-align: center;
+        text-decoration: none;
+        color: var(--text-color);
+        white-space: nowrap;
+        cursor: pointer;
+
+        &.primary {
+            background-color: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+    }
+}

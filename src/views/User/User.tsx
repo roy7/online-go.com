@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,1171 +16,820 @@
  */
 
 import * as React from "react";
-import {_, pgettext, interpolate, cc_to_country_name, sorted_locale_countries} from "translate";
-import {Link} from "react-router";
-import {post, get, put, del, patch} from "requests";
-import config from "config";
-import data from "data";
-import * as moment from "moment";
-import {Card, OGSComponent, Resolver, PlayerIcon} from "components";
-import {GameList} from "GameList";
-import {Player} from "Player";
-import {longRankString, rankString, updateDup, alertModerator, getGameResultText, ignore} from "misc";
-import {durationString} from "TimeControl";
-import {openModerateUserModal} from "ModerateUser";
-import {PaginatedTable} from "PaginatedTable";
-import {challenge} from "ChallengeModal";
-import {errorAlerter} from "misc";
-import player_cache from "player_cache";
-import {getPrivateChat} from "PrivateChat";
-import {PlayerAutocomplete} from "PlayerAutocomplete";
-import * as Dropzone from "react-dropzone";
-import {image_resizer} from "image_resizer";
-import {Flag} from "Flag";
-import {Markdown} from "Markdown";
+import { useLocation, useParams } from "react-router-dom";
+import { _, pgettext, moment } from "@/lib/translate";
+import { get, put } from "@/lib/requests";
+import queryString from "query-string";
+import * as data from "@/lib/data";
 
+import * as preferences from "@/lib/preferences";
+import * as player_cache from "@/lib/player_cache";
 
-declare let swal;
+import { Card } from "@/components/material";
 
-interface UserProperties {
-    params: any;
-    // id?: any,
-    // user?: any,
-    // callback?: ()=>any,
-}
+import { ModTools } from "@moderator-ui/ModTools";
+import { GameHistoryTable } from "./GameHistoryTable";
+import { ReviewsAndDemosTable } from "./ReviewsAndDemosTable";
+import { BotControls } from "./BotControls";
+import {
+    rankString,
+    getUserRating,
+    humble_rating,
+    rating_to_rank,
+    boundedRankString,
+    rank_deviation,
+} from "@/lib/rank_utils";
+import { openModerateUserModal } from "@/components/ModerateUser";
+import { errorAlerter } from "@/lib/misc";
+import { Flag } from "@/components/Flag";
+import { Markdown } from "@/components/Markdown";
+import { RatingsChart } from "@/components/RatingsChart";
+import { RatingsChartByGame } from "@/components/RatingsChartByGame";
+import { RatingsChartDistribution } from "@/components/RatingsChartDistribution";
+import { associations } from "@/lib/associations";
+import { Toggle } from "@/components/Toggle";
+import { AchievementList } from "@/components/Achievements";
+import { VersusCard } from "./VersusCard";
+import { AvatarCard, AvatarCardEditableFields } from "./AvatarCard";
+import { ActivityCard } from "./ActivityCard";
+import { ActiveDroppedGameList } from "@/components/ActiveDroppedGameList";
+import { NewUserRankChooser } from "@/components/NewUserRankChooser";
+import { usePreference } from "@/lib/preferences";
+import "./User.css";
 
-let UserRating = (props: {rating: number}) => {
-    let wholeRating = Math.floor(props.rating);
-    let tenthsRating = Math.floor(props.rating * 10) % 10;
-    //return <span className="UserRating">{wholeRating}{(tenthsRating > 0) && <sup><span className="frac"><sup>{tenthsRating}</sup>&frasl;<sub>10</sub></span></sup>}</span>;
-    return <span className="UserRating">{wholeRating}</span>;
-};
+type RatingsSpeed = "overall" | "blitz" | "live" | "correspondence";
+type RatingsSize = 0 | 9 | 13 | 19;
 
-let Rank = (props: {ranking: number, pro?: boolean}) => (<span>{rankString(props)}</span>);
+export function User(props: { user_id?: number }): React.ReactElement {
+    const params = useParams();
+    const user_id =
+        props.user_id ||
+        ("user_id" in params ? parseInt(params.user_id as string) : data.get("user").id);
+    const location = useLocation();
+    const show_mod_log = queryString.parse(location.search)["show_mod_log"] === "1";
 
-let center = {textAlign: "center"};
-let right = {textAlign: "right"};
-let inlineBlock = {display: "inline-block"};
-let marginRight0 = {marginRight: "0"};
-let marginBottom0 = {marginBottom: "0"};
-let nowrapAlignTop = {whiteSpace: "nowrap", verticalAlign: "top"};
+    const [user, setUser] = React.useState<rest_api.FullPlayerDetail["user"]>();
+    const [editing, setEditing] = React.useState(/edit/.test(location.hash));
+    const [selected_speed, setSelectedSpeed] = React.useState<RatingsSpeed>("overall");
+    const [selected_size, setSelectedSize] = React.useState<RatingsSize>(0);
+    const [resolved, setResolved] = React.useState(false);
+    const [temporary_show_ratings, setTemporaryShowRatings] = React.useState(false);
+    const [showDistributionChart, setShowDistributionChart] = usePreference(
+        "show-rank-distribution-graph",
+    );
+    const [bot_ai, setBotAi] = React.useState("");
+    const [bot_apikey, setBotApikey] = React.useState("");
+    const [rating_chart_type_toggle_left, setRatingChartTypeToggleLeft] = React.useState<
+        number | undefined
+    >(undefined);
+    const [show_ratings_in_rating_grid, setShowRatingsInRatingGrid] = React.useState(
+        preferences.get("show-ratings-in-rating-grid"),
+    );
+    const [rating_graph_plot_by_games, setRatingGraphPlotByGames] = React.useState(
+        preferences.get("rating-graph-plot-by-games"),
+    );
 
-export class User extends Resolver<UserProperties, any> {
-    refs: {
-        moderator_notes;
-        vacation_left;
-        bot_ai;
-        game_table;
-        review_table;
+    const [active_games, setActiveGames] =
+        React.useState<rest_api.FullPlayerDetail["active_games"]>();
+    const [ladders, setLadders] = React.useState<rest_api.FullPlayerDetail["ladders"]>();
+    const [achievements, setAchievements] =
+        React.useState<rest_api.FullPlayerDetail["achievements"]>();
+    const [groups, setGroups] = React.useState<rest_api.FullPlayerDetail["groups"]>();
+    const [online_leagues, setOnlineLeagues] =
+        React.useState<rest_api.FullPlayerDetail["online_leagues"]>();
+    const [tournaments, setTournaments] =
+        React.useState<rest_api.FullPlayerDetail["tournaments"]>();
+    const [titles, setTitles] = React.useState<rest_api.FullPlayerDetail["titles"]>();
+    const [trophies, setTrophies] = React.useState<rest_api.FullPlayerDetail["trophies"]>();
+    const [vs, setVs] = React.useState<rest_api.FullPlayerDetail["vs"]>();
+
+    const resolve = (user_id: number) => {
+        setUser(undefined);
+        setEditing(/edit/.test(location.hash));
+
+        if (user_id === undefined) {
+            console.error("invalid user id: ", user_id);
+            setUser(undefined);
+            setResolved(true);
+            return;
+        }
+
+        // Cheaper API calls provide partial profile data before players/{user_id}/full
+        Promise.all([get(`players/${user_id}`), get(`/termination-api/player/${user_id}`)])
+            .then((responses: [rest_api.PlayerDetail, rest_api.termination_api.Player]) => {
+                if (resolved) {
+                    return;
+                }
+                const user: rest_api.FullPlayerDetail["user"] = {
+                    ...responses[0],
+                    professional: responses[0].ui_class.indexOf("professional") >= 0,
+                    is_moderator: responses[0].ui_class.indexOf("moderator") >= 0,
+                    is_superuser: responses[0].ui_class.indexOf("admin") >= 0,
+                    moderator_powers: 0,
+                    is_tournament_moderator: false,
+                    is_watched: false,
+                    on_vacation: false,
+                    vacation_left: 0,
+                    deviation: responses[0].ratings.overall.deviation,
+                    ranking: responses[1].ranking,
+                    rating: responses[1].rating,
+                    ratings: responses[1].ratings,
+                    first_name: null,
+                    last_name: null,
+                    real_name_is_private: responses[0] === null,
+                    ui_class_extra: null,
+                };
+                setUser(user);
+            })
+            .catch(console.log);
+
+        get(`players/${user_id}/full`)
+            .then((response: rest_api.FullPlayerDetail) => {
+                setResolved(true);
+                try {
+                    player_cache.update(response.user);
+                    setBotApikey(response.user.bot_apikey);
+                    setBotAi(response.user.bot_ai);
+                    setUser(response.user);
+                    setActiveGames(response.active_games);
+                    setAchievements(response.achievements);
+                    setTitles(response.titles);
+                    setTrophies(response.trophies);
+                    setLadders(response.ladders);
+                    setTournaments(response.tournaments);
+                    setGroups(response.groups);
+                    setOnlineLeagues(response.online_leagues);
+                    setVs(response.vs);
+
+                    window.document.title = response.user.username;
+                } catch (err) {
+                    console.error(err);
+                }
+            })
+            .catch((err) => {
+                console.error(err);
+                setUser(undefined);
+                setResolved(true);
+            });
     };
-    user_id: number;
-    vacation_left: string;
 
-    constructor(props) {
-        super(props);
-        this.state = {
-            user: null,
-            vs: {},
-            ip: null,
-            vacation_left: null,
-            ranks: [],
-            syncRating: null,
-            host_ip_settings: null,
-            new_icon: null,
-            bot_apikey: null,
-            bot_ai: null,
-            editing: /edit/.test(window.location.hash),
-        };
-
-        this.on("mount", () => {
-            let interval_start = Date.now();
-            let vacation_update_interval = setInterval(() => {
-                if (this.resolved && this.state.user) {
-                    if (this.state.user.on_vacation) {
-                        let time_diff = Math.round(((Date.now()) - interval_start) / 1000);
-                        this.refs.vacation_left.innerText = durationString(this.state.user.vacation_left - time_diff);
-                    }
-                }
-            }, 1000);
-            this.on("unmount", () => {
-                clearInterval(vacation_update_interval);
-            });
-        });
-    }
-
-    resolve(props) {
-        this.setState({"user": null});
-        this.user_id = parseInt(props.params.user_id || data.get("config.user").id);
-        return get(`players/${this.user_id}/full`).then((state) => {
-            try {
-                //console.log(state);
-                player_cache.update(state);
-                this.update(state);
-            } catch (err) {
-                console.error(err.stack);
-            }
-        }).catch((err) => {
-            console.error(err);
-            this.setState({"user": null});
-        });
-    }
-
-    update(state) {
-        state.moderator_notes = state.user.moderator_notes;
-        state.bot_apikey = state.user.bot_apikey;
-
-        state.user.rating = parseFloat(state.user.rating);
-        state.user.rating_live = parseFloat(state.user.rating_live);
-        state.user.rating_blitz = parseFloat(state.user.rating_blitz);
-        state.user.rating_correspondence = parseFloat(state.user.rating_correspondence);
-        let user = state.user;
-        try {
-            state.website_href = user.website.trim().toLowerCase().indexOf("http") !== 0 ? "http://" + user.website : user.website;
-        } catch (e) {
-            console.log(e.stack);
-        }
-
-
-        let vs = state.vs;
-        state.vs.total = vs.wins + vs.losses + vs.draws;
-        state.vs.winPercent = (vs.wins / vs.total) * 100.0;
-        state.vs.lossPercent = (vs.losses / vs.total) * 100.0;
-        state.vs.drawPercent = (vs.draws / vs.total) * 100.0;
-        state.vs.recent5 = vs.history ? vs.history.slice(0, 5) : [];
-        for (let i = 0; i < state.vs.recent5.length; ++i) {
-            state.vs.recent5[i].pretty_date = moment(new Date(state.vs.recent5[i].date)).format("ll");
-            //state.vs.recent5[i].pretty_date = moment(new Date(state.vs.recent5[i].date)).calendar();
-        }
-
-
-        state.ranks = [];
-        if (state.user.professional) {
-            for (let i = 37; i < Math.max(state.user.ranking, 45) + 1; ++i) {
-                state.ranks.push({"value": i, "text": longRankString({"ranking": i, "pro": 1})});
-            }
-        } else {
-            for (let i = 0; i < Math.max(state.user.ranking, 35) + 1; ++i) {
-                state.ranks.push({"value": i, "text": longRankString(i)});
-            }
-        }
-        state.syncRating = (rank, type) => {
-            if (type === "overall") {
-                state.user.rating = rank * 100 + 50 - 900;
-            } else {
-                state.user["rating_" + type] = rank * 100 + 50 - 900;
-            }
-        };
-
-        this.on("unmount", () => $("#rating-history-tooltip").remove());
-
-         if (data.get("config.user").is_moderator) /* aliases {{{ */ {
-            state.ip = null;
-            state.host_ip_settings = null;
-         } /* }}} */
-
-        this.setState(state);
-        this.updateHostIpSettings();
-    }
-
-    updateHostIpSettings() {
-        if (!this.state.user) {
-            return;
-        }
-
-        let last_ip = this.state.user.last_ip;
-        get("host_ip_settings/", {"address": last_ip})
-        .then((lst) => {
-            this.setState({"host_ip_settings": lst.count ? lst.results[0] : {
-                "id": 0,
-                "address": last_ip,
-                "clients_limit": 5,
-                "ban_affects_all": true,
-                "chatban_affects_all": true
-            }});
-        });
-    }
-
-    saveHostIpSettings() {
-        console.log("Saving host ip settings: ", this.state.host_ip_settings);
-        let obj = {
-            "address": this.state.host_ip_settings.address,
-            "clients_limit": this.state.host_ip_settings.clients_limit,
-            "ban_affects_all": this.state.host_ip_settings.ban_affects_all ? 1 : 0,
-            "chatban_affects_all": this.state.host_ip_settings.chatban_affects_all ? 1 : 0,
-        };
-        console.log("->", obj);
-
-        $("#host-ip-saved").addClass("hidden");
-
-        if (this.state.host_ip_settings.id) {
-            patch(`host_ip_settings/${this.state.host_ip_settings.id}`, obj)
-            .then(() => $("#host-ip-saved").removeClass("hidden"));
-        } else {
-            post(`host_ip_settings/`, obj)
-            .then(() => {
-                $("#host-ip-saved").removeClass("hidden");
-                this.updateHostIpSettings();
-            });
-        }
-    }
-
-    moderatorNotesSetTimeout: number;
-    updateModeratorNotes(event) {
-        let notes = event.target.value;
-        this.setState({moderator_notes: notes});
-
-        if (this.moderatorNotesSetTimeout) {
-            clearTimeout(this.moderatorNotesSetTimeout);
-        }
-        this.moderatorNotesSetTimeout = setTimeout(() => {
-            this.moderatorNotesSetTimeout = null;
-            put(`players/${this.user_id}/moderate/notes`, { "moderator_notes": notes.trim() });
-        }, 500);
-    }
-
-    addFriend(id) { /* {{{ */
-        post("me/friends", { "player_id": id })
-        .then(() => this.setState({friend_request_sent: true}));
-    } /* }}} */
-    removeFriend(id) { /* {{{ */
-        swal({
-            text: _("Are you sure you wish to remove this friend?"),
-            showCancelButton: true,
-        }).then(() => {
-            post("me/friends", { "delete": true, "player_id": id })
-            .then(() => this.setState({
-                friend_request_sent: false,
-                friend_request_received: false,
-                is_friend: false
-            }));
-        })
-        .catch(ignore);
-    } /* }}} */
-    acceptFriend(id) { /* {{{ */
-        post("me/friends/invitations", { "from_user": id })
-        .then(() => this.setState({
-            friend_request_sent: false,
-            friend_request_received: false,
-            is_friend: true
-        }));
-    } /* }}} */
-    generateAPIKey() { /* {{{ */
-        if (!confirm("Generating a new key will immediate invalidate the previous key, are you sure you wish to continue?")) {
-            return;
-        }
-        post("ui/bot/generateAPIKey", { "bot_id": this.state.user.id })
-        .then((res) => this.setState({
-            bot_apikey: res.bot_apikey
-        }));
-    } /* }}} */
-    saveBot() { /* {{{ */
-        put("ui/bot/saveBotInfo", { "bot_id": this.state.user.id, "bot_ai": this.state.bot_ai })
-        .then(() => {
-            swal("Bot Engine updated");
-            this.resolve(this.props);
-        });
-    } /* }}} */
-    pm() { /* {{{ */
-        getPrivateChat(this.user_id).open();
-    } /* }}} */
-    saveSuperUserStuff() { /* {{{ */
-        let moderation_note = null;
-        do {
-            moderation_note = prompt("Moderator note:");
-            if (moderation_note == null) {
-                return;
-            }
-            moderation_note = moderation_note.trim();
-        } while (moderation_note === "");
-
-
-        put(`players/${this.user_id}/moderate`, {
-            "player_id": this.user_id,
-            "is_bot": $("#user-su-is-bot").is(":checked") ? 1 : 0,
-            "bot_owner": $("#user-su-bot-owner").val(),
-            "username": $("#user-su-username").val(),
-            "password": $("#user-su-password").val(),
-            "email": $("#user-su-email").val(),
-
-            "moderation_note": moderation_note,
-            "numProvisional": parseInt($("#user-su-num-provisional").val()),
-            "ranking": parseInt($("#user-su-ranking-overall").val()),
-            "rating": $("#user-su-rating-overall").val(),
-            "ranking_blitz": parseInt($("#user-su-ranking-blitz").val()),
-            "rating_blitz": $("#user-su-rating-blitz").val(),
-            "ranking_live": parseInt($("#user-su-ranking-live").val()),
-            "rating_live": $("#user-su-rating-live").val(),
-            "ranking_correspondence": parseInt($("#user-su-ranking-correspondence").val()),
-            "rating_correspondence": $("#user-su-rating-correspondence").val(),
-            "is_active": $("#user-su-active").is(":checked") ? 1 : 0,
-            "supporter": $("#user-su-site-supporter").is(":checked") ? 1 : 0,
-            "is_banned": $("#user-su-banned").is(":checked") ? 1 : 0,
-            "is_shadowbanned": $("#user-su-shadowbanned").is(":checked") ? 1 : 0,
-            "is_watched": $("#user-su-watched").is(":checked") ? 1 : 0,
-            "can_create_tournaments": $("#user-su-can-create-tournaments").is(":checked") ? 1 : 0,
-            "locked_username": $("#user-su-locked-username").is(":checked") ? 1 : 0,
-            "locked_ranking": $("#user-su-locked-ranking").is(":checked") ? 1 : 0,
-            "clear_icon": $("#user-su-clear-icon").is(":checked") ? 1 : 0,
-        })
-        //.then(()=>$("#user-su-controls").modal('toggle'))
-        .then(() => alert("Should be toggling modal")) // TODO
-        .catch(errorAlerter);
-    } /* }}} */
-
-    updateIcon = (files) => {{{
-        console.log(files);
-        this.setState({new_icon: files[0]});
-        image_resizer(files[0], 512, 512).then((file: Blob) => {
-            put(`players/${this.user_id}/icon`, file)
-            .then((res) => {
-                console.log("Upload successful", res);
-                player_cache.update({
-                    id: this.user_id,
-                    icon: res.icon,
-                });
-            });
-        })
-        .catch(errorAlerter);
-    }}}
-    clearIcon = () => {{{
-        this.setState({new_icon: null});
-        del(`players/${this.user_id}/icon`)
-        .then((res) => {
-            console.log("Cleared icon", res);
-            player_cache.update({
-                id: this.user_id,
-                icon: res.icon,
-            });
-        })
-        .catch(errorAlerter);
-    }}}
-    toggleEdit = () => {{{
-        if (this.state.editing) {
-            this.saveEditChanges();
-            this.setState({editing: false});
-        } else {
-            this.setState({editing: true});
-        }
-    }}}
-    saveCountry = (ev) => {{{
-        this.setState({user: Object.assign({}, this.state.user, {country: ev.target.value})});
-    }}}
-    saveAbout = (ev) => {{{
-        this.setState({user: Object.assign({}, this.state.user, {about: ev.target.value})});
-    }}}
-    saveUsername = (ev) => {{{
-        this.setState({user: Object.assign({}, this.state.user, {username: ev.target.value})});
-    }}}
-    saveWebsite = (ev) => {{{
-        this.setState({user: Object.assign({}, this.state.user, {website: ev.target.value})});
-    }}}
-    saveRealFirstName = (ev) => {{{
-        this.setState({user: Object.assign({}, this.state.user, {
-            first_name: ev.target.value,
-            name: ev.target.value + " " + (this.state.user.last_name || ""),
-        })});
-    }}}
-    saveRealLastName = (ev) => {{{
-        this.setState({user: Object.assign({}, this.state.user, {
-            last_name: ev.target.value,
-            name: (this.state.user.first_name || "") + " " + ev.target.value,
-        })});
-    }}}
-    saveRealNameIsPrivate = (ev) => {{{
-        this.setState({user: Object.assign({}, this.state.user, { real_name_is_private: ev.target.checked})});
-    }}}
-    saveEditChanges() {{{
-        put(`players/${this.user_id}`, {
-            "username": this.state.user.username,
-            "first_name": this.state.user.first_name,
-            "last_name": this.state.user.last_name,
-            "about": this.state.user.about,
-            "website": this.state.user.website,
-            "country": this.state.user.country,
-            "real_name_is_private": this.state.user.real_name_is_private,
-        })
-        .then((res) => {
-            console.log(res);
-        })
-        .catch(errorAlerter);
-    }}}
-    openModerateUser = () => {{{
-        let modal = openModerateUserModal(this.state.user);
-        modal.on("close", () => {
-            this.resolve(this.props);
-        });
-    }}}
-
-    updateGameSearch = (player) => {{{
-        if (player) {
-            this.refs.game_table.filter.alt_player = player.id;
-        } else {
-            delete this.refs.game_table.filter.alt_player;
-        }
-        this.refs.game_table.filter_updated();
-    }}}
-    updateReviewSearch = (player) => {{{
-        if (player) {
-            this.refs.review_table.filter.alt_player = player.id;
-        } else {
-            delete this.refs.review_table.filter.alt_player;
-        }
-        this.refs.review_table.filter_updated();
-    }}}
-
-
-    resolvedRender() {
-        let user = this.state.user;
-        if (!user) { return this.renderInvalidUser(); }
-        let editing = this.state.editing;
-
-        /* any dom binding stuff needs to happen after the template has been
-         * processed and added to the dom, this can be done with a 0ms timer */
-        let domWorkScaleback = 1;
-        let doDomWork = () => { /* {{{ */
-             if ($("#rating-history").length === 0) {
-                 console.log("Dom wasn't ready, retrying shortly");
-                 if (this.mounted) {
-                     setTimeout(doDomWork, (domWorkScaleback = domWorkScaleback * 1.2 + 10));
-                 }
-                 return;
-             }
-
-            let overall = [];
-            let d = {
-                "overall": [],
-                "blitz": [],
-                "live": [],
-                "correspondence": [],
-            };
-            let d2 = [];
-            let rating_history = this.state.rating_history;
-            let min_time = Date.now();
-            let max_time = 0;
-
-            let total_points = 0;
-            let times = [];
-            for (let k in d) {
-                for (let i = 0; i < rating_history[k].length; ++i) {
-                    min_time = Math.min(min_time, rating_history[k][i].t * 1000);
-                    max_time = Math.max(max_time, rating_history[k][i].t * 1000);
-                    d[k].push([rating_history[k][i].t, rating_history[k][i].e]);
-                    ++total_points;
-                    times.push(rating_history[k][i].t);
-                }
-            }
-
-            times = times.sort();
-            let times_hash = {};
-            for (let i = 0; i < times.length; ++i) {
-                times_hash[times[i]] = i;
-            }
-
-            function lookupIndexFromTime(t) {
-                return times_hash[t];
-            }
-            for (let k in d) {
-                for (let i = 0; i < d[k].length; ++i) {
-                    d[k][i][0] = lookupIndexFromTime(d[k][i][0]);
-                }
-            }
-
-            function showTooltip(x, y, contents) {
-                let w = $(window).width();
-                $("<div id='rating-history-tooltip'>" + contents + "</div>").css({
-                    position: "absolute",
-                    display: "none",
-                    top: y + 5,
-                    right: w - (x - 5),
-                    border: "1px solid #000",
-                    color: "#fff",
-                    padding: "2px",
-                    "background-color": "#444",
-                    opacity: 0.80
-                }).appendTo("body").fadeIn(200);
-            }
-            let previousPoint = null;
-            let series_array_src = [rating_history["overall"], rating_history["blitz"], rating_history["live"], rating_history["correspondence"]];
-            let series_array = [d["overall"], d["blitz"], d["live"], d["correspondence"]];
-            try {
-                $.plot($("#rating-history"), series_array, {
-                    series: {
-                        lines: { show: true },
-                        points: { show: false },
-                        shadowSize: 3
-                    },
-                    colors: [
-                        "#086C9C",
-                        "#F74D00",
-                        "#F7A100",
-                        "#5D0CA6"
-                        //"#05A658",
-                        //"#EE4207",
-                        //"#EEAA07",
-                        //"#1831A2"
-                    ],
-                    labelFormatter: (label, series) => {
-                        // series is the series object for the label
-                        return '<a href="#' + label + '">' + label + "</a>";
-                    },
-                    grid: {
-                        hoverable: true,
-                        clickable: true,
-                        borderWidth: 1,
-                    },
-                    //xaxis: { zoomRange: [0.1, 10], panRange: [-10, 10] },
-                    //xaxis: { zoomRange: [0.1, 10], panRange: [-10, 10] },
-                    //yaxis: { zoomRange: [0.1, 10], panRange: [-10, 10] },
-                    xaxis: {
-                        //zoomRange: [0, rating_history.length-1],
-                        //panRange: [min_time, max_time],
-                        panRange: [0, times.length + 5],
-                        //min: d['overall'] ? d['overall'][Math.max(0,d['overall'].length-50)][0] : 0,
-                        show: false,
-                        //mode: "time"
-                    },
-                    yaxis: { zoomRange: [30, 5000], panRange: [-1500, 3300] },
-                    zoom: { interactive: true },
-                    pan: { interactive: true },
-                });
-            } catch (e) {
-                console.error(e);
-            }
-
-            previousPoint = null;
-            let lock_view = false;
-            $("#rating-history").on("plothover", (event, pos, item) => {
-                if (item) {
-                    if (previousPoint !== item.dataIndex && !lock_view) {
-                        previousPoint = item.dataIndex;
-
-                        let series_class =  "fa fa-circle-o";
-                        switch (item.seriesIndex) {
-                            case 1: series_class = "fa fa-bolt"; break;
-                            case 2: series_class = "fa fa-clock-o"; break;
-                            case 3: series_class = "ogs-turtle"; break;
-                        }
-
-                        $("#rating-history-tooltip").remove();
-                        let x = item.datapoint[0].toFixed(2);
-                        let y = item.datapoint[1].toFixed(2);
-                        let obj = series_array_src[item.seriesIndex][item.dataIndex];
-
-                        let how = _("Manually changed");
-
-                        let extra = "";
-                        if (obj.moderator) {
-                            how = _("Changed by moderator");
-                            extra += obj.moderator.username + "<br/>";
-                        }
-
-                        if (obj.note) {
-                            if (obj.note === "mass system adjustment") {
-                                how = _("Mass system adjustment");
-                            } else {
-                                how = _(obj.note);
-                            }
-                        }
-
-                        let body = "" +
-                            "<div style='text-align: center;'>" +
-                            '<span class="pull-left">' + parseFloat(obj.e).toFixed(1) + "</span><i class='" + series_class + "'></i><span class='pull-right'>" + rankString(obj.r) + "</span>" + "</div>" +
-                            (obj.g ? "<a href='/game/" + obj.g + "'>" + _("Game") + " " + obj.g + "</a>" : how) + "<br/>" +
-                            extra +
-                            "<i>" + (new Date(obj.t * 1000).toLocaleString()) + "</i>";
-
-                        showTooltip(item.pageX, item.pageY, body);
-                    }
-                } else {
-                    if (!lock_view) {
-                        $("#rating-history-tooltip").remove();
-                        previousPoint = null;
-                    }
-                }
-            });
-
-            $("#rating-history").on("plotclick", (event, pos, item) => {
-                lock_view = !lock_view;
-                if (!lock_view) {
-                    $("#rating-history-tooltip").remove();
-                    previousPoint = null;
-                }
-            });
-
-            try {
-                $("#user-su-is-bot").prop("checked", this.state.user.is_bot);
-            } catch (e) {
-                console.log(e.stack);
-            }
-        }; /* }}} */
-        setTimeout(doDomWork, 0); /* }}} */
-
-        const rows = [
-            ["a1", "b1", "c1"],
-            ["a2", "b2", "c2"],
-            ["a3", "b3", "c3"],
-            // .... and more
-        ];
-
-        let game_history_groomer = (results) => {
-
-            let ret = [];
-            for (let i = 0; i < results.length; ++i) {
-                let r = results[i];
-                let item: any = {
-                    "id": r.id,
-                };
-
-                item.width = r.width;
-                item.height = r.height;
-                item.date = r.ended ? new Date(r.ended) : null;
-                item.black = r.players.black;
-                item.black_won = !r.black_lost && r.white_lost;
-                item.black_class = item.black_won ? (item.black.id === this.user_id ? "library-won" : "library-lost") : "";
-                item.white = r.players.white;
-                item.white_won = !r.white_lost && r.black_lost;
-                item.white_class = item.white_won ? (item.white.id === this.user_id ? "library-won" : "library-lost") : "";
-                item.result_class = (item.white_won && (item.white.id === this.user_id)) || (item.black_won && (item.black.id === this.user_id)) ? "library-won-result" : "library-lost-result";
-                if ((r.white_lost && r.black_lost) || (!r.white_lost && !r.black_lost)) {
-                    item.result_class = "";
-                }
-                item.name = r.name;
-
-                if (item.name && item.name.trim() === "") {
-                    item.name = item.href;
-                }
-
-                item.href = "/game/" + item.id;
-                item.result = getGameResultText(r);
-
-                ret.push(item);
-            }
-            return ret;
-        };
-
-        let review_history_groomer = (results) => {
-            let ret = [];
-
-            for (let i = 0; i < results.length; ++i) {
-                let r = results[i];
-                let item: any = {
-                    "id": r.id,
-                };
-
-                item.width = r.width;
-                item.height = r.height;
-                item.date = r.created ? new Date(r.created) : null;
-                item.black = r.players.black;
-                item.black_won = !r.black_lost && r.white_lost;
-                item.black_class = item.black_won ? (item.black.id === this.user_id ? "library-won" : "library-lost") : "";
-                item.white = r.players.white;
-                item.white_won = !r.white_lost && r.black_lost;
-                item.white_class = item.white_won ? (item.white.id === this.user_id ? "library-won" : "library-lost") : "";
-                item.name = r.name;
-                item.href = "/review/" + item.id;
-
-                if (!item.name || item.name.trim() === "") {
-                    item.name = item.href;
-                }
-
-                ret.push(item);
-            }
-            return ret;
-        };
-
-        let cleaned_website = "";
-        if (user && user.website) {
-            if (user.website.indexOf("http") !== 0) {
-                cleaned_website = "http://" + user.website;
-            } else {
-                cleaned_website = user.website;
-            }
-        }
-
-
-        let global_user = data.get("config.user");
-
-        return (
-          <div className="User container">
-            <div className="row">
-                <div className="col-sm-8">
-                    { (window["user"].is_moderator) && <button className="danger xs pull-right" onClick={this.openModerateUser}>{_("Moderator Controls")}</button> }
-                    <h1>{user.username}
-                        {((global_user.id === user.id || global_user.is_moderator) || null)   &&
-                            <button onClick={this.toggleEdit} className='xs edit-button'>
-                                <i className={editing ? "fa fa-save" : "fa fa-pencil"}/> {" " + (editing ? _("Save") : _("Edit"))}
-                            </button>
-                        }
-                    </h1>
-                    <Card className="profile-card">
-                        <div className="row">
-                            <div className="col-sm-2" style={{minWidth: "128px"}}>
-                                {this.state.editing
-                                    ?  <Dropzone className="Dropzone" onDrop={this.updateIcon} multiple={false}>
-                                        {this.state.new_icon
-                                            ? <img src={this.state.new_icon.preview} style={{height: "128px", width: "128px"}} />
-                                            : <PlayerIcon id={user.id} size={128} />
-                                        }
-                                       </Dropzone>
-                                    : <PlayerIcon id={user.id} size={128} />
-                                }
-                                {this.state.editing &&
-                                    <button className='xs' onClick={this.clearIcon}>{_("Clear icon")}</button>
-                                }
-                            </div>
-
-                            <div className="col-sm-10">
-                                <dl className="horizontal">
-                                    {(global_user.is_moderator && user.is_watched) && <dt ></dt>}
-                                    {(global_user.is_moderator && user.is_watched) && <dd ><h3 style={inlineBlock}><i className="fa fa-exclamation-triangle"></i> Watched <i className="fa fa-exclamation-triangle"></i></h3></dd>}
-
-                                    {(user.timeout_provisional) && <dt ></dt>}
-                                    {(user.timeout_provisional) && <dd ><h4 style={inlineBlock}><i className="fa fa-exclamation-triangle"></i> {_("Has recently timed out of a game")} <i className="fa fa-exclamation-triangle"></i></h4></dd>}
-
-                                    {(!user.is_superuser && user.is_moderator) && <dt ></dt>}
-                                    {(!user.is_superuser && user.is_moderator) && <dd ><h3 style={inlineBlock}><i className="fa fa-gavel"></i> {_("Moderator")}</h3></dd>}
-
-                                    {(!user.is_moderator && user.supporter) && <dt ></dt>}
-                                    {(!user.is_moderator && user.supporter) && <dd ><h3 style={inlineBlock}><i className="fa fa-star"></i> {_("Site Supporter")} <i className="fa fa-star"></i></h3></dd>}
-
-                                    {(user.is_superuser) && <dt ></dt>}
-                                    {(user.is_superuser) && <dd ><h3 style={inlineBlock}><i className="fa fa-smile-o fa-spin"></i> {_("OGS Developer")} <i className="fa fa-smile-o fa-spin"></i></h3></dd>}
-
-                                    {(!user.is_superuser && user.is_tournament_moderator) && <dt ></dt>}
-                                    {(!user.is_superuser && user.is_tournament_moderator) && <dd ><h3 style={inlineBlock}><i className="fa fa-trophy"></i> {_("Tournament Moderator")} <i className="fa fa-trophy"></i></h3></dd>}
-
-                                    {(user.is_bot) && <dt ></dt>}
-                                    {(user.is_bot) && <dd ><i className="fa fa-star"></i> <b>{_("Artificial Intelligence")}</b> <i className="fa fa-star"></i></dd>}
-                                    {(user.is_bot) && <dt >{pgettext("Bot AI engine", "Engine")}</dt>}
-                                    {(user.is_bot) && <dd  id="bot-ai-name">{user.bot_ai}</dd>}
-                                    {(user.is_bot) && <dt >{_("Administrator")}</dt>}
-                                    {(user.is_bot) && <dd ><Player user={user.bot_owner}/></dd>}
-
-                                    {(user.on_vacation) && <dt ></dt>}
-                                    {(user.on_vacation) && <dd ><h3 style={inlineBlock}><i className="fa fa-smile-o fa-spin"></i> {_("On Vacation")} <i className="fa fa-smile-o fa-spin"></i></h3></dd>}
-                                    {(user.on_vacation) && <dt ></dt>}
-                                    {(user.on_vacation) && <dd ><h5 style={inlineBlock} ref="vacation_left"></h5></dd>}
-
-                                    <dt>{_("User Name")}</dt>
-                                    {editing
-                                        ? <dd><input value={user.username} onChange={this.saveUsername} /></dd>
-                                        : <dd>{user.username}</dd>
-                                    }
-
-                                    {(editing || user.name) && <dt >{_("Real Name")}</dt>}
-                                    {(!editing && user.name) && <dd className={user.real_name_is_private ? "italic" : ""}>{user.name}{user.real_name_is_private ? " " + _("(hidden)") : ""}</dd>}
-                                    {(editing || null) &&
-                                        <dd>
-                                            <input placeholder={_("First") /* translators: First name */} value={user.first_name || ""} onChange={this.saveRealFirstName}/>
-                                            &nbsp;
-                                            <input placeholder={_("Last") /* translators: Last name */} value={user.last_name || ""} onChange={this.saveRealLastName}/>
-                                        </dd>
-                                    }
-                                    {(editing || null) && <dt></dt>}
-                                    {(editing || null) && <dd ><input type="checkbox" id="real-name-is-private" checked={user.real_name_is_private} onChange={this.saveRealNameIsPrivate}/> <label htmlFor="real-name-is-private">{_("Hide real name")}</label></dd>}
-
-                                    {(!(user.professional)) && <dt >{_("Rating")}</dt>}
-                                    {(!(user.professional)) && <dd ><b><span className="rating_details text-color"><UserRating rating={user.rating}/></span></b>
-                                        [
-                                        <span className="rating_details" title={_("Blitz")}><i className="fa fa-bolt"></i> <UserRating rating={user.rating_blitz}/></span>
-                                        <span className="rating_details" title={_("Live")}><i className="fa fa-clock-o"></i>  <UserRating rating={user.rating_live}/></span>
-                                        <span className="rating_details" style={marginRight0} title={_("Correspondence")}><i className="ogs-turtle"></i> <UserRating rating={user.rating_correspondence}/></span>
-                                        ]
-                                    </dd>}
-
-                                    <dt>{_("Rank")}</dt>
-                                    {(user.professional) && <dd ><b><span className="rating_details text-color"><Rank ranking={user.ranking} pro={user.professional}></Rank></span></b></dd>}
-                                    {(!(user.professional)) && <dd ><b><span className="rating_details text-color"><Rank ranking={user.ranking}></Rank></span></b>
-                                        [
-                                        <span className="rating_details"  title={_("Blitz")}><i className="fa fa-bolt"></i> <Rank ranking={user.ranking_blitz}></Rank></span>
-                                        <span className="rating_details" title={_("Live")}><i className="fa fa-clock-o"></i> <Rank ranking={user.ranking_live}></Rank></span>
-                                        <span className="rating_details" style={marginRight0} title={_("Correspondence")}><i className="ogs-turtle"></i> <Rank ranking={user.ranking_correspondence}></Rank></span>
-                                        ]
-                                    </dd>}
-
-                                    <dt>{_("Country")}</dt>
-                                    {this.state.editing
-                                      ? <dd>
-                                            <Flag country={user.country} big/>
-                                            <select value={user.country} onChange={this.saveCountry}>
-                                                {sorted_locale_countries.map((C) => (
-                                                    <option key={C.cc} value={C.cc}>{C.name}</option>
-                                                ))}
-                                            </select>
-                                        </dd>
-                                      : <dd>
-                                            <Flag country={user.country} big/>
-                                            <span>{cc_to_country_name(user.country)}</span>
-                                        </dd>
-                                    }
-
-                                    {(editing || user.about) && <dt>{_("About")}</dt>}
-                                    {(!editing && user.about) && <dd><Markdown source={user.about}/></dd>}
-                                    {(editing || null) && <dd><textarea rows={6} onChange={this.saveAbout} value={user.about}/></dd>}
-
-                                    {(editing || user.website) && <dt >{_("Website")}</dt>}
-                                    {(!editing && user.website) && <dd >
-                                        <a target="_blank" href={cleaned_website}>{user.website}</a>
-                                    </dd>}
-                                    {(editing || null) &&
-                                        <dd><input type="url" value={user.website} onChange={this.saveWebsite} /></dd>
-                                    }
-
-
-                                    {(this.state.titles.length > 0) && <dt >{_("Titles")}</dt>}
-                                    {(this.state.titles.length > 0) && <dd className="trophies">
-                                        {this.state.titles.map((title, idx) => (<img key={idx} className="trophy" src={`${config.cdn_release}/img/trophies/${title.icon}`} title={title.title}/>))}
-                                    </dd>}
-
-                                    <dt>{_("Trophies")}</dt>
-                                    {(this.state.trophies.length > 0) && <dd className="trophies">
-                                        {this.state.trophies.map((trophy, idx) => (
-                                            <a key={idx} href={trophy.tournament_id ? ("/tournament/" + trophy.tournament_id) : "#"}>
-                                                <img className="trophy" src={`${config.cdn_release}/img/trophies/${trophy.icon}`} title={trophy.title}/>
-                                            </a>
-                                        ))}
-                                    </dd>}
-                                    {(this.state.trophies.length === 0) && <dd >
-                                        {_("None")}
-                                    </dd>}
-                                </dl>
-                            </div>
-                        </div>
-                        {((window["user"] && window["user"].is_moderator) || null) && <div >
-                            <b>Users with the same IP or Browser ID</b>
-                            <PaginatedTable
-                                className="aliases"
-                                name="aliases"
-                                source={`players/${this.user_id}/aliases/`}
-                                columns={[
-                                    {header: "Registered",   className: "date",       render: (X) => moment(X.registration_date).format("YYYY-MM-DD")},
-                                    {header: "Last Login",   className: "date",       render: (X) => moment(X.last_login).format("YYYY-MM-DD")},
-                                    {header: "Browser ID",   className: "browser_id", render: (X) => X.last_browser_id},
-                                    {header: "User",         className: "",           render: (X) => (
-                                        <span>
-                                            <Player user={X}/>
-                                            {(X.has_notes || null) && <i className="fa fa-file-text-o"/>}
-                                        </span>
-                                    )},
-                                    {header: "Banned",       className: "banned",     render: (X) => X.is_banned ? _("Yes") : _("No")},
-                                    {header: "Shadowbanned", className: "banned",     render: (X) => X.is_shadowbanned ? _("Yes") : _("No")},
-                                ]}
-                            />
-                            <textarea className="moderator-notes" ref="moderator_notes" onChange={this.updateModeratorNotes.bind(this)} placeholder="Moderator notes" value={this.state.moderator_notes}/>
-                        </div>}
-
-                        {((window["user"] && window["user"].id !== user.id) || null) && <div  style={{marginTop: "1rem"}}>
-                            {(this.state.is_friend) && <button  className="btn btn-danger" onClick={() => this.removeFriend(this.user_id)}>{_("Remove Friend")}</button>}
-                            {(!this.state.is_friend && !this.state.friend_request_sent && !this.state.friend_request_received) && <button  className="btn btn-default"
-                                    onClick={() => this.addFriend(this.user_id)}>{_("Add Friend")}</button> }
-                            {(!this.state.is_friend && this.state.friend_request_sent) && <span  className="btn btn-success disabled">{_("Friend request sent")}</span>}
-                            {(!this.state.is_friend && this.state.friend_request_received) && <button  className="btn btn-success"
-                                    onClick={() => this.acceptFriend(this.user_id)}>{_("Accept Friend Request")}</button> }
-                            <button id="challenge" type="submit" className="btn btn-default" onClick={() => challenge(this.state.user.id)}>{_("Challenge to a Match")}</button>
-                            <button type="submit" className="btn btn-default" onClick={() => this.pm()}>{_("Send Message")}</button>
-                            {/* <a type="button" className="btn btn-default" href={`/library/${user.id}`}>{_("View Library")}</a> */}
-                            <div style={right}>
-                                <span className="fakelink" onClick={() => alertModerator({user: this.user_id})}>{_("Report User")}</span>
-                            </div>
-                        </div>}
-                    </Card>
-                    {(user.provisional_games_left || null) && <b >{interpolate(_("Note: This account is currently marked as provisional until {{user.provisional_games_left}} more games have been played"), {"user.provisional_games_left": user.provisional_games_left})}</b>}
-
-
-                    <h2>{_("Active Games")}</h2>
-                    <GameList list={this.state.active_games} player={user}/>
-                </div>
-                {/* end left col */}
-
-                <div className="col-sm-4">
-                    {(!(user.professional)) &&
-                        <div >
-                        <h1>{_("Statistics")}</h1>
-                        <Card>
-                            <h5>{_("Ranked games played")}: {this.state.statistics.total}</h5>
-                            <h5>{_("Won")}: {this.state.statistics.wins}  &nbsp;&nbsp; {_("Lost")}: {this.state.statistics.losses}  &nbsp;&nbsp; {_("Draws")}: {this.state.statistics.draws}</h5>
-
-                            <div className="progress">
-                                <div className="progress-bar success" style={{width: this.state.statistics.winPerc + "%"}}>{this.state.statistics.wins || <span>&nbsp;</span>}</div>
-                                <div className="progress-bar primary" style={{width: this.state.statistics.lossPerc + "%"}}>{this.state.statistics.losses || <span>&nbsp;</span>}</div>
-                                <div className="progress-bar info" style={{width: this.state.statistics.drawPerc + "%"}}>{this.state.statistics.draws || <span>&nbsp;</span>}</div>
-                            </div>
-
-
-                            <table><tbody><tr>
-                                    <td style={{verticalAlign: "top"}}><i className="fa fa-circle-o" title={_("Overall")} style={{width: "1.5rem !important", textAlign: "center"}}></i></td>
-                                    <td style={nowrapAlignTop}><Rank ranking={user.ranking}></Rank>&nbsp;</td>
-                                    <td width="99%">
-                                        <div className="progress">
-                                            <div className="progress-bar right primary" style={{width: ((1000 + user.rating) % 100.0) + "%"}} >
-                                                {((1000 + user.rating) % 100.0 >= 50) && <span ><UserRating rating={user.rating} /></span>}
-                                            </div>
-                                            {((1000 + user.rating) % 100.0 < 50) && <span ><UserRating rating={user.rating}/></span>}
-                                        </div>
-                                    </td>
-                                    <td style={nowrapAlignTop}>&nbsp;<Rank ranking={user.ranking + 1}></Rank></td>
-                            </tr></tbody></table>
-                            <table><tbody><tr>
-                                    <td style={{verticalAlign: "top"}}><i className="fa fa-bolt"  title={_("Blitz")} style={{width: "1.5rem !important", textAlign: "center"}}></i></td>
-                                    <td style={nowrapAlignTop}><Rank ranking={user.ranking_blitz}></Rank>&nbsp;</td>
-                                    <td width="99%">
-                                        <div className="progress">
-                                            <div className="progress-bar right reject" style={{width: ((1000 + user.rating_blitz) % 100.0) + "%"}}>
-                                                {((1000 + user.rating_blitz) % 100.0 >= 50) && <span ><UserRating rating={user.rating_blitz} /></span>}
-                                            </div>
-                                            {((1000 + user.rating_blitz) % 100.0 < 50) && <span ><UserRating rating={user.rating_blitz}/></span>}
-                                        </div>
-                                    </td>
-                                    <td style={nowrapAlignTop}>&nbsp;<Rank ranking={user.ranking_blitz + 1}></Rank></td>
-                            </tr></tbody></table>
-                            <table><tbody><tr>
-                                    <td style={{verticalAlign: "top"}}><i className="fa fa-clock-o" title={_("Live")} style={{width: "1.5rem !important", textAlign: "center"}}></i></td>
-                                    <td style={nowrapAlignTop}><Rank ranking={user.ranking_live}></Rank>&nbsp;</td>
-                                    <td width="99%">
-                                        <div className="progress">
-                                            <div className="progress-bar right danger" style={{width: ((1000 + user.rating_live) % 100.0) + "%"}}>
-                                                {((1000 + user.rating_live) % 100.0 >= 50) && <span ><UserRating rating={user.rating_live}/></span>}
-                                            </div>
-                                            {((1000 + user.rating_live) % 100.0 < 50) && <span ><UserRating rating={user.rating_live}/></span>}
-                                        </div>
-                                    </td>
-                                    <td style={nowrapAlignTop}>&nbsp;<Rank ranking={user.ranking_live + 1}></Rank></td>
-                            </tr></tbody></table>
-                            <table><tbody><tr>
-                                    <td style={{verticalAlign: "top"}}><i className="ogs-turtle"  title={_("Correspondence")} style={{width: "1.5rem !important", textAlign: "center"}}></i></td>
-                                    <td style={nowrapAlignTop}><Rank ranking={user.ranking_correspondence}></Rank>&nbsp;</td>
-                                    <td width="99%">
-                                        <div className="progress">
-                                            <div className="progress-bar right info" style={{width: ((1000 + user.rating_correspondence) % 100.0) + "%"}}>
-                                                {((1000 + user.rating_correspondence) % 100.0 >= 50) && <span ><UserRating rating={user.rating_correspondence}/></span>}
-                                            </div>
-                                            {((1000 + user.rating_correspondence) % 100.0 < 50) && <span ><UserRating rating={user.rating_correspondence}/></span>}
-                                        </div>
-                                    </td>
-                                    <td style={nowrapAlignTop}>&nbsp;<Rank ranking={user.ranking_correspondence + 1}></Rank></td>
-                            </tr></tbody></table>
-
-                            <div id="rating-history"></div>
-                            <div className="text-align-center"><Link to={interpolate("/ratinghistory/{{user_id}}", {"user_id": this.user_id})} target="_blank"><i className="fa fa-arrows-alt"></i>{" " + _("Full View")}</Link></div>
-                        </Card>
-                        </div>
-                    }
-
-                    {(this.state.vs.total || null) && <div >
-                        <Card>
-                            <h5 style={center}>{interpolate("You have won {{vs.wins}} out of {{vs.total}} games against {{username}}", {"vs.wins": this.state.vs.wins, "vs.total": this.state.vs.total, "username": user.username})}</h5>
-                            <div className="progress">
-                                <div className="progress-bar success" style={{width: this.state.vs.winPercent + "%"}}>{this.state.vs.wins}</div>
-                                <div className="progress-bar primary" style={{width: this.state.vs.lossPercent + "%"}}>{this.state.vs.losses}</div>
-                                <div className="progress-bar info" style={{width: this.state.vs.drawPercent + "%"}}>{this.state.vs.draws}</div>
-                            </div>
-
-                            {this.state.vs.recent5.map((game, idx) => (
-                                <div style={center} key={idx}>
-                                    <span className="date">{game.pretty_date}</span> <a href={`/game/${game.game}`}>#{game.game}</a>
-                                    {(game.state === "W") && <i  className="fa fa-check-circle-o won"></i>}
-                                    {(game.state === "L") && <i  className="fa fa-times loss"></i>}
-                                </div>
-                            ))}
-                        </Card>
-                    </div>}
-
-                    {(user.is_bot && user.bot_owner && user.bot_owner.id === window["user"].id) && <div >
-                        <h2>{_("Bot Controls")}</h2>
-                        <div className="well">
-                            <h5>{_("API Key")}
-                            <button className="btn btn-xs btn-default" onClick={() => this.generateAPIKey()}>{_("Generate API Key")}</button>
-                            </h5>
-                            <input type="text" className="form-control" value={this.state.bot_apikey} />
-                            <h5>{_("Bot Engine")}</h5>
-                            <input type="text" className="form-control" placeholder={_("Engine Name")} value={this.state.bot_ai}
-                                   onChange={(event) => this.setState({"bot_ai": (event.target as HTMLInputElement).value})}/>
-                            <div style={right}>
-                                <button className="btn btn-xs btn-default" onClick={() => this.saveBot()}>{_("Save")}</button>
-                            </div>
-                        </div>
-                    </div>}
-
-                    {(this.state.ip) && <Card >
-                        <div><b>IP</b><span> {this.state.ip}</span></div>
-                        <div><b>Country</b><span> {this.state.ip.country} / {cc_to_country_name(this.state.ip.country)}</span></div>
-                        <div><b>Region</b>{this.state.ip.subdivisions.map((sd, idx) => (<span key={idx} > {sd} </span>))}</div>
-                        <div><b>Map</b><span> <a href={`https://maps.google.com/maps?ll=${this.state.ip.location[0]},${this.state.ip.location[1]}`} target="_blank">map</a></span></div>
-                        <div><b>IP Shadowbanned</b> <span>{parseInt(user.ip_shadowbanned) === 1 ? _("Yes") : _("No")}</span></div>
-                        {(this.state.host_ip_settings) && <div >
-                            <form className="form-horizontal" role="form">
-                                <div className="form-group" style={marginBottom0}>
-                                    <label className="col-xs-7" htmlFor="clients-limit ">User limit</label>
-                                    <div className="col-xs-5">
-                                        <input type="number" id="clients-limit" style={{width: "5rem"}} value={this.state.host_ip_settings.clients_limit}
-                                               onChange={(event) => this.setState({"host_ip_settings": updateDup(this.state.host_ip_settings, "clients_limit", parseInt((event.target as HTMLInputElement).value))})}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="form-group" style={marginBottom0}>
-                                    <label className="col-xs-7" htmlFor="ban-affects-all">Ban affects all</label>
-                                    <div className="col-xs-5">
-                                        <input type="checkbox" id="ban-affects-all" value={this.state.host_ip_settings.ban_affects_all}
-                                               onChange={(event) => this.setState({"host_ip_settings": updateDup(this.state.host_ip_settings, "ban_affects_all", (event.target as HTMLInputElement).checked)})}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="form-group" style={marginBottom0}>
-                                    <label className="col-xs-7" htmlFor="chatban-affects-all">Chatban affects all</label>
-                                    <div className="col-xs-5">
-                                        <input type="checkbox" id="chatban-affects-all" value={this.state.host_ip_settings.chatban_affects_all}
-                                               onChange={(event) => this.setState({"host_ip_settings": updateDup(this.state.host_ip_settings, "chatban_affects_all", (event.target as HTMLInputElement).checked)})}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="form-group" style={marginBottom0}>
-                                    <label className="col-xs-7" htmlFor=""></label>
-                                    <div className="col-xs-5">
-                                        <button className="btn btn-default btn-xs" onClick={() => this.saveHostIpSettings()}>save</button>
-                                        <i id="host-ip-saved" className="fa fa-check-circle-o won hidden"></i>
-                                    </div>
-                                </div>
-                            </form>
-                        </div>}
-                    </Card>}
-
-
-                    <h2>{_("Activity")}</h2>
-                    <Card>
-                        <h4>{_("Ladders")}</h4>
-                        {(this.state.ladders.length > 0) && <div >
-                            <dl className="activity-dl">
-                                {this.state.ladders.map((ladder, idx) => (
-                                <dd key={idx}>
-                                    #{ladder.rank} <a href={`/ladder/${ladder.id}`}>{ladder.name}</a>
-                                </dd>
-                                ))}
-                            </dl>
-                        </div>}
-                        {(!this.state.ladders.length) && <div >
-                            <div>{_("Not participating in any ladders")}</div>
-                        </div>}
-
-
-                        <h4>{_("Tournaments")}</h4>
-                        {(this.state.tournaments.length > 0) && <div >
-                            <dl className="activity-dl">
-                                {this.state.tournaments.map((tournament, idx) => (
-                                <dd key={idx}>
-                                    <a href={`/tournament/${tournament.id}`}><img src={tournament.icon} className="icon" /> {tournament.name}</a>
-                                </dd>
-                                ))}
-                            </dl>
-                        </div>}
-                        {(!this.state.tournaments.length) && <div >
-                            <div>{_("Not participating in any tournaments")}</div>
-                        </div>}
-
-                        <h4>{_("Groups")}</h4>
-                        {(this.state.groups.length > 0) && <div >
-                            <dl className="activity-dl">
-                                {this.state.groups.map((group, idx) => (
-                                <dd key={idx}>
-                                    <a href={`/group/${group.id}`}><img src={group.icon} className="icon" /> {group.name}</a>
-                                </dd>
-                                ))}
-                            </dl>
-                        </div>}
-                        {(!this.state.groups.length) && <div >
-                            <div>{_("Not a member of any groups")}</div>
-                        </div>}
-                    </Card>
-                </div>
-                {/* end right col */}
-            </div>
-
-            <div className="row">{/* Game History {{{ */}
-                <div className="col-sm-12">
-                    <h2>{_("Game History")}</h2>
-                    <Card>
-                    <div>{/* loading-container="game_history.settings().$loading" */}
-                        <div className="search">
-                            <PlayerAutocomplete onComplete={this.updateGameSearch}/>
-                        </div>
-
-                        <PaginatedTable
-                            className=""
-                            ref="game_table"
-                            name="game-history"
-                            method="get"
-                            source={`games/`}
-                            filter={{
-                                "player": this.user_id,
-                                "source": "play",
-                                "ended__isnull": false,
-                            }}
-                            orderBy={["-ended"]}
-                            groom={game_history_groomer}
-                            columns={[
-                                {header: _("Date"),   className: () => "date",                            render: (X) => moment(X.date).format("YYYY-MM-DD")},
-                                {header: _("Size"),   className: () => "board_size",                      render: (X) => `${X.width}x${X.height}`},
-                                {header: _("Name"),   className: () => "name",                            render: (X) => <Link to={X.href}>{X.name}</Link>},
-                                {header: _("Black"),  className: (X) => ("player " + (X ? X.black_class : "")), render: (X) => <Player user={X.black}/>},
-                                {header: _("White"),  className: (X) => ("player " + (X ? X.white_class : "")), render: (X) => <Player user={X.white}/>},
-                                {header: _("Result"), className: (X) => (X ? X.result_class : ""),            render: (X) => X.result},
-                            ]}
-                        />
-                    </div>
-                    </Card>
-                </div>
-            </div>
-            {/* }}} */}
-
-            <div className="row">{/* Reviews and Demos{{{ */}
-                <div className="col-sm-12">
-                    <h2>{_("Reviews and Demos")}</h2>
-                    <Card>
-                        <div>{/* loading-container="game_history.settings().$loading" */}
-                            <div className="search">
-                                <PlayerAutocomplete onComplete={this.updateReviewSearch}/>
-                            </div>
-
-                            <PaginatedTable
-                                className=""
-                                ref="review_table"
-                                name="review-history"
-                                method="get"
-                                source={`reviews/`}
-                                filter={{
-                                    "owner_id": this.user_id,
-                                }}
-                                orderBy={["-created"]}
-                                groom={review_history_groomer}
-                                columns={[
-                                    {header: _("Date"),   className: () => "date",                            render: (X) => moment(X.date).format("YYYY-MM-DD")},
-                                    {header: _("Name"),   className: () => "name",                            render: (X) => <Link to={X.href}>{X.name}</Link>},
-                                    {header: _("Black"),  className: (X) => ("player " + (X ? X.black_class : "")), render: (X) => <Player user={X.black}/>},
-                                    {header: _("White"),  className: (X) => ("player " + (X ? X.white_class : "")), render: (X) => <Player user={X.white}/>},
-                                ]}
-                            />
-                        </div>
-                    </Card>
-                </div>
-            </div>
-            {/* }}} */}
-          </div>
+    const toggleRatings = () => {
+        setTemporaryShowRatings(!temporary_show_ratings);
+    };
+
+    const saveAbout = (ev: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setUser(Object.assign({}, user, { about: ev.target.value }));
+    };
+
+    const saveEditChanges = (profile_card_changes: AvatarCardEditableFields) => {
+        setEditing(false);
+        setUser(
+            Object.assign({}, user, profile_card_changes, {
+                name: `${profile_card_changes.first_name} ${profile_card_changes.last_name}`,
+            }),
         );
-    }
-    renderInvalidUser() {
-        if (this.resolved) {
+        if (user) {
+            put(`players/${user.id}`, {
+                ...profile_card_changes,
+                about: user.about,
+            })
+                .then(console.log)
+                .catch(errorAlerter);
+        }
+    };
+
+    const openModerateUser = () => {
+        if (user) {
+            const modal = openModerateUserModal(user);
+
+            modal?.on("close", () => {
+                // reload after moderator changes something
+                resolve(user_id);
+            });
+        } else {
+            console.error("user not set");
+        }
+    };
+
+    const updateTogglePosition = (_height: number, width: number) => {
+        setRatingChartTypeToggleLeft(width + 30);
+    };
+
+    const renderInvalidUser = () => {
+        if (resolved) {
             return (
-            <div className="User flex stetch">
-                <div className="container flex fill center-both">
-                <h3>{_("User not found")}</h3>
+                <div className="User flex stretch">
+                    <div className="container flex fill center-both">
+                        <h3>{_("User not found")}</h3>
+                    </div>
                 </div>
-            </div>
             );
         }
         return (
-        <div className="User flex stetch">
-            <div className="container flex fill center-both">
+            <div className="User flex stretch">
+                <div className="container flex fill center-both"></div>
+            </div>
+        );
+    };
+
+    const renderRatingGrid = (show_ratings: boolean) => {
+        return (
+            <div className="ratings-grid">
+                <div className="title-row">
+                    <span className="title" />
+                    <span className="title">
+                        <i className="speed-icon fa fa-circle-o" title={_("Overall")} />
+                    </span>
+                    <span className="title">
+                        <i className="speed-icon fa fa-bolt" title={_("Blitz")} />
+                    </span>
+                    <span className="title">
+                        <i className="speed-icon fa fa-clock-o" title={_("Live")} />
+                    </span>
+                    <span className="title">
+                        <i className="speed-icon ogs-turtle" title={_("Correspondence")} />
+                    </span>
+                </div>
+                {([0, 9, 13, 19] as const).map((size: RatingsSize) => (
+                    <div key={size} className="speed">
+                        {size > 0 ? (
+                            <span className="title">
+                                {size}x{size}
+                            </span>
+                        ) : (
+                            <span className="title">
+                                <i className="speed-icon fa fa-circle-o" title={_("Overall")} />
+                            </span>
+                        )}
+
+                        {(["overall", "blitz", "live", "correspondence"] as const).map(
+                            (speed: RatingsSpeed) => (
+                                <span key={speed} className="cell">
+                                    {renderRatingOrRank(speed, size, show_ratings)}
+                                </span>
+                            ),
+                        )}
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
+    const renderRatingOrRank = (speed: RatingsSpeed, size: RatingsSize, show_rating: boolean) => {
+        if (!user) {
+            return;
+        }
+
+        const r = getUserRating(user, speed, size);
+
+        return (
+            <div
+                className={
+                    `rating-entry ${speed}-${size}x${size} ` +
+                    (r.unset ? "unset " : "") +
+                    (speed === selected_speed && size === selected_size ? "active" : "")
+                }
+                onClick={() => {
+                    setSelectedSize(size);
+                    setSelectedSpeed(speed);
+                }}
+            >
+                <div className="rating">
+                    <span className="left">
+                        {show_rating
+                            ? humble_rating(r.rating, r.deviation).toFixed(0)
+                            : boundedRankString(
+                                  rating_to_rank(humble_rating(r.rating, r.deviation)),
+                                  true,
+                              )}
+                    </span>
+                    &plusmn;
+                    <span className="right">
+                        {show_rating
+                            ? r.deviation.toFixed(0)
+                            : rank_deviation(r.rating, r.deviation).toFixed(1)}
+                    </span>
+                </div>
+            </div>
+        );
+    };
+
+    React.useEffect(() => {
+        window.document.title = _("Player");
+        resolve(user_id);
+
+        return () => {
+            setResolved(false);
+        };
+    }, [user_id]);
+
+    /* Render */
+    if (!user) {
+        return renderInvalidUser();
+    }
+    const showRatings = temporary_show_ratings;
+
+    const global_user = data.get("config.user");
+    const cdn_release = data.get("config.cdn_release");
+    const account_links = user.self_reported_account_linkages;
+
+    const viewer = data.get("user");
+
+    // The User's own Profile page is where they can choose their starting rank if they
+    // skipped it before.
+    const show_rank_chooser =
+        viewer.id === user.id &&
+        user?.need_rank &&
+        user?.starting_rank_hint &&
+        ["skip", "not provided"].includes(user.starting_rank_hint);
+
+    const show_graph_type_toggle =
+        // We don't show the toggle if they have turned it off in prefs, or if they have no ratings to show.
+        // This implementation is using `user.need_rank` to infer whether we have any ratings to show,
+        // ... done this way because it's handy, we don't have another easy way to find out right here
+        // (that lookup is buried in the ratings chart component)
+        !preferences.get("rating-graph-always-use") && !user?.need_rank;
+
+    return (
+        <div className="User container">
+            <div>
+                <div className="profile-card">
+                    <div className="avatar-and-ratings-row">
+                        <AvatarCard
+                            user={user as any}
+                            force_show_ratings={temporary_show_ratings}
+                            editing={editing}
+                            openModerateUser={openModerateUser}
+                            onEdit={() => setEditing(true)}
+                            onSave={saveEditChanges}
+                        />
+
+                        {(!preferences.get("hide-ranks") || temporary_show_ratings) &&
+                            (!user.professional || global_user.id === user.id) &&
+                            // prevent flash while starting_rank_hint is determined, handle case where
+                            // if the back end for some reason doesn't send starting_rank_hint
+                            (!!user.starting_rank_hint || resolved) && (
+                                <div className="ratings-container">
+                                    {show_rank_chooser ? (
+                                        <Card>
+                                            <NewUserRankChooser
+                                                show_skip={false}
+                                                onChosen={() => {
+                                                    resolve(user_id);
+                                                }}
+                                            />
+                                        </Card>
+                                    ) : (
+                                        <>
+                                            {/* Ratings  */}
+                                            <h3 className="ratings-title">
+                                                {_("Ratings")}
+                                                <Toggle
+                                                    height={14}
+                                                    width={30}
+                                                    checked={show_ratings_in_rating_grid}
+                                                    id="show-ratings-or-ranks"
+                                                    onChange={(checked) => {
+                                                        setShowRatingsInRatingGrid(checked);
+                                                        preferences.set(
+                                                            "show-ratings-in-rating-grid",
+                                                            checked,
+                                                        );
+                                                    }}
+                                                />
+                                            </h3>
+                                            {renderRatingGrid(show_ratings_in_rating_grid)}
+                                            <div
+                                                className="toggle-container"
+                                                onClick={() =>
+                                                    setShowDistributionChart(!showDistributionChart)
+                                                }
+                                            >
+                                                <div className="toggle-indicator">
+                                                    {showDistributionChart ? "▼" : "▶"}
+                                                </div>
+                                                <span className="toggle-label">
+                                                    {showDistributionChart ? (
+                                                        <span>
+                                                            {pgettext(
+                                                                "label for button to hide the global distribution chart",
+                                                                "Hide Distribution",
+                                                            )}
+                                                        </span>
+                                                    ) : (
+                                                        <span>
+                                                            <i className="speed-icon fa fa-bar-chart" />
+                                                            {pgettext(
+                                                                "label for button to show the global distribution chart",
+                                                                "Compare to Global Distribution",
+                                                            )}
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                    </div>
+                </div>
+            </div>
+            <div className="ratings-row">
+                {showDistributionChart &&
+                    (!preferences.get("hide-ranks") || temporary_show_ratings) && (
+                        <div className="ratings-chart">
+                            <RatingsChartDistribution
+                                myRating={
+                                    viewer.id === user.id
+                                        ? (getUserRating(user, "overall", 0).rating || 0) | 0
+                                        : undefined
+                                }
+                                otherRating={
+                                    viewer.id === user.id
+                                        ? undefined
+                                        : (getUserRating(user, "overall", 0).rating || 0) | 0
+                                }
+                                otherPlayerName={viewer.id === user.id ? undefined : user.username}
+                                showRatings={show_ratings_in_rating_grid ?? true}
+                            />
+                        </div>
+                    )}
+            </div>
+            {(!preferences.get("hide-ranks") || temporary_show_ratings) &&
+                (!user.professional || global_user.id === user.id) && (
+                    <div className="ratings-row">
+                        <div className="ratings-chart">
+                            {rating_graph_plot_by_games ? (
+                                <RatingsChartByGame
+                                    playerId={user.id}
+                                    speed={selected_speed}
+                                    size={selected_size}
+                                    updateChartSize={updateTogglePosition}
+                                />
+                            ) : (
+                                <RatingsChart
+                                    playerId={user.id}
+                                    speed={selected_speed}
+                                    size={selected_size}
+                                    updateChartSize={updateTogglePosition}
+                                />
+                            )}
+                        </div>
+                        {show_graph_type_toggle && (
+                            <div
+                                className="graph-type-toggle"
+                                style={{
+                                    left: rating_chart_type_toggle_left,
+                                }}
+                            >
+                                <Toggle
+                                    height={10}
+                                    width={20}
+                                    checked={rating_graph_plot_by_games}
+                                    id="show-ratings-in-days"
+                                    onChange={(checked) => {
+                                        setRatingGraphPlotByGames(checked);
+                                        preferences.set("rating-graph-plot-by-games", checked);
+                                    }}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
+
+            {preferences.get("hide-ranks") && (
+                <button className="danger toggle-ratings" onClick={toggleRatings}>
+                    {showRatings ? _("Hide ratings") : _("Show ratings")}
+                </button>
+            )}
+
+            {(data.get("user")?.is_moderator || null) && (
+                <ModTools user_id={user.id} show_mod_log={show_mod_log} />
+            )}
+
+            <div className="row">
+                <div className="col-sm-8">
+                    {(user.about || editing || null) && (
+                        <Card>
+                            <div className="about-container">
+                                {!editing && user.about && (
+                                    <div className="about-markdown">
+                                        <Markdown source={user.about} />
+                                    </div>
+                                )}
+                                {(editing || null) && (
+                                    <textarea
+                                        className="about-editor"
+                                        rows={15}
+                                        onChange={saveAbout}
+                                        placeholder={_("About yourself")}
+                                        value={user.about}
+                                    />
+                                )}
+                            </div>
+                        </Card>
+                    )}
+
+                    {active_games && (
+                        <ActiveDroppedGameList
+                            games={active_games}
+                            user={user}
+                            showCount={true}
+                        ></ActiveDroppedGameList>
+                    )}
+
+                    <div className="row">
+                        <GameHistoryTable user_id={user.id} is_bot={user.is_bot} />
+                    </div>
+
+                    <div className="row">
+                        <ReviewsAndDemosTable user_id={user.id} />
+                    </div>
+                </div>
+
+                <div className="col-sm-4">
+                    {!user.professional && (
+                        <div>
+                            {(!preferences.get("hide-ranks") || temporary_show_ratings) &&
+                                (!user.professional || global_user.id === user.id) &&
+                                account_links && (
+                                    <Card>
+                                        <SelfReportedAccountLinkages links={account_links} />
+                                    </Card>
+                                )}
+
+                            {achievements != null && achievements.length > 0 && (
+                                <Card>
+                                    <h3>{_("Achievements")}</h3>
+                                    <AchievementList list={achievements} />
+                                </Card>
+                            )}
+
+                            {titles != null &&
+                                trophies != null &&
+                                (titles.length > 0 ||
+                                    trophies.length > 0 ||
+                                    user.id === 126739) && (
+                                    <Card>
+                                        <h3>{_("Trophies")}</h3>
+
+                                        {titles.length > 0 && (
+                                            <div className="trophies">
+                                                {titles.map((title, idx) => (
+                                                    <img
+                                                        key={idx}
+                                                        className="trophy"
+                                                        src={`${cdn_release}/img/trophies/${title.icon}`}
+                                                        title={title.title}
+                                                    />
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {trophies.length > 0 && (
+                                            <div className="trophies">
+                                                {trophies.map((trophy, idx) => (
+                                                    <a
+                                                        key={idx}
+                                                        href={
+                                                            trophy.tournament_id
+                                                                ? "/tournament/" +
+                                                                  trophy.tournament_id
+                                                                : "#"
+                                                        }
+                                                    >
+                                                        <img
+                                                            className="trophy"
+                                                            src={`${cdn_release}/img/trophies/${trophy.icon}`}
+                                                            title={trophy.title}
+                                                        />
+                                                    </a>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {(user.id === 519197 || null) && (
+                                            <React.Fragment>
+                                                <hr />
+                                                <div className="SpicyDragon-trophy">
+                                                    <img
+                                                        src="https://cdn.online-go.com/spicydragon/spicydragon400.jpg"
+                                                        width={400}
+                                                        height={340}
+                                                    />
+                                                    <div>
+                                                        {pgettext(
+                                                            "Special trophy for a professional go player",
+                                                            "1004 simultaneous correspondence games",
+                                                        )}
+                                                    </div>
+                                                    <div>
+                                                        {moment("2020-07-20T14:38:37").format(
+                                                            "LLLL",
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </React.Fragment>
+                                        )}
+
+                                        {(user.id === 126739 || null) && (
+                                            <React.Fragment>
+                                                <hr />
+                                                <div className="Dolphin-trophy">
+                                                    <img
+                                                        src="https://cdn.online-go.com/achievements/dolphin.png"
+                                                        width={300}
+                                                        height={300}
+                                                    />
+                                                    <div>
+                                                        <div>
+                                                            1513 simultaneous correspondence games
+                                                            <div>
+                                                                {moment(
+                                                                    "2021-11-21T00:00:00",
+                                                                ).format("LL")}
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            50,000 games played
+                                                            <div>
+                                                                {moment(
+                                                                    "2023-03-25T00:00:00",
+                                                                ).format("LL")}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div></div>
+                                                </div>
+                                            </React.Fragment>
+                                        )}
+                                    </Card>
+                                )}
+                        </div>
+                    )}
+
+                    {vs != null && vs.wins + vs.losses + vs.draws > 0 && (
+                        <div>
+                            <VersusCard {...vs} username={user.username} />
+                        </div>
+                    )}
+
+                    {user.is_bot &&
+                        user.bot_owner &&
+                        user.bot_owner.id === data.get("user")?.id && (
+                            <BotControls
+                                bot_ai={bot_ai ?? ""}
+                                bot_apikey={bot_apikey ?? ""}
+                                bot_id={user.id}
+                                onBotAiChanged={(bot_ai) => setBotAi(bot_ai)}
+                                onBotApiKeyChanged={(bot_apikey) => setBotApikey(bot_apikey)}
+                            />
+                        )}
+
+                    <h2>{_("Activity")}</h2>
+                    <ActivityCard
+                        user={user}
+                        ladders={ladders}
+                        tournaments={tournaments}
+                        groups={groups}
+                        online_leagues={online_leagues}
+                    />
+                </div>
+                {/* end right col  */}
             </div>
         </div>
-        );
+    );
+}
+
+function SelfReportedAccountLinkages({
+    links,
+}: {
+    links: rest_api.AccountLinks;
+}): React.ReactElement {
+    const associations = [1, 2, 3] as const;
+    const userAssociations = [];
+    for (const num of associations) {
+        const country = links[`org${num}`];
+        const id = links[`org${num}_id`];
+        const rank = links[`org${num}_rank`];
+        if (country && (id || (rank && rank > 0))) {
+            userAssociations.push({
+                num,
+                country,
+                id,
+                rank,
+            });
+        }
     }
+
+    const servers = [
+        ["kgs", _("KGS")],
+        ["igs", _("IGS / PandaNet")],
+        ["dgs", _("DGS")],
+        ["golem", _("Little Golem")],
+        ["wbaduk", _("WBaduk")],
+        ["tygem", _("Tygem")],
+        ["fox", _("Fox")],
+        ["yike", _("Yike Weiqi")],
+        ["goquest", _("GoQuest")],
+        ["badukpop", _("BadukPop")],
+    ] as const;
+    const userServers = [];
+
+    for (const [server, name] of servers) {
+        const id = links[`${server}_username`];
+        const rank = links[`${server}_rank`];
+        if (id || (rank && rank > 0)) {
+            userServers.push({
+                server,
+                name,
+                id,
+                rank,
+            });
+        }
+    }
+
+    return (
+        <div className="SelfReportedAccountLinkages">
+            {userAssociations.length > 0 && <h3>{_("Associations")}</h3>}
+            {userAssociations.map((props) => (
+                <AssociationLink key={props.num} {...props} />
+            ))}
+
+            {userServers.length > 0 && <h3>{_("Servers")}</h3>}
+            {userServers.map((props) => (
+                <ServerLink key={props.server} {...props} />
+            ))}
+        </div>
+    );
+}
+function AssociationLink({
+    country,
+    id,
+    rank,
+}: {
+    country?: string;
+    id?: string;
+    rank?: number;
+}): React.ReactElement | null {
+    try {
+        if (!country) {
+            return null;
+        }
+
+        const association = associations.filter((a) => a.country === country)[0];
+        let linker: ((id: string) => string) | undefined;
+
+        if (country === "us") {
+            linker = (id: string) => `https://agagd.usgo-archive.org/player/${id}/`;
+        }
+
+        if (country === "eu") {
+            linker = (id: string) =>
+                `https://www.europeangodatabase.eu/EGD/Player_Card.php?&key=${id}`;
+        }
+
+        if (country === "ru") {
+            linker = (id: string) => `https://gofederation.ru/players/${id}`;
+        }
+
+        return (
+            <div className="association-link">
+                <Flag country={country} />
+                <span className="name">{association.acronym || association.name}</span>
+                {linker && id ? (
+                    <a className="id" href={linker(id)} rel="noopener">
+                        {id}
+                    </a>
+                ) : (
+                    <span className="id">{id || ""}</span>
+                )}
+                <span className="rank">{rank ? rankString(rank) : ""}</span>
+            </div>
+        );
+    } catch {
+        return <div>[invalid association]</div>;
+    }
+}
+
+function ServerLink({
+    name,
+    id,
+    rank,
+}: {
+    name: string;
+    id?: string;
+    rank?: number;
+}): React.ReactElement | null {
+    if (!id && !rank) {
+        return null;
+    }
+
+    return (
+        <div className="server-link">
+            <span className="name">{name}</span>
+            <span className="id">{id || ""}</span>
+            <span className="rank">{rank ? rankString(rank) : ""}</span>
+        </div>
+    );
 }

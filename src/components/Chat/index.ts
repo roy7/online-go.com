@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -15,5 +15,11 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-export * from "./Chat";
+export * from "./ChatChannelList";
+export * from "./ChatLog";
+export * from "./ChatUsersList";
+export * from "./ChatDetails";
+export * from "./ChatIndicator";
+export * from "./ChatList";
+export * from "./ChatLine";
+export * from "./chat_markup";

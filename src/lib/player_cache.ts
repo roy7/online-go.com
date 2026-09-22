@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -15,80 +15,142 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-import {get} from "requests";
+import { get } from "@/lib/requests";
+import { Batcher } from "@/lib/batcher";
+import { Publisher, Subscriber as RealSubscriber } from "@/lib/pubsub";
+import { user_uploads_url } from "@/lib/cdn";
 
-let cache: {[id: number]: any} = {};
-let cache_by_username: {[username: string]: any} = {};
-let active_fetches: {[id: number]: Promise<any>} = {};
-let nicknames: Array<string> = [];
+import Debug from "@/lib/debug";
+const debug = new Debug("player_cache");
 
-let listeners = {};
-let last_id = 0;
+// The player cache's Subscriber is just like a vanilla Subscriber, but can
+// subscribe to and unsubscribe from numerical ids or whole Players. The
+// function to query which players we are watching is called "players", not
+// "channels".
+const publisher = new Publisher<{ [id: string]: PlayerCacheEntry }>();
+export class Subscriber {
+    private subscriber: RealSubscriber<{ [id: string]: PlayerCacheEntry }, string>;
 
-class Listener {
-    player_id: number;
-    id: number;
-    cb: (player: any, player_id?: number) => void;
-    remove_callbacks: Array<() => void>;
-
-    constructor(player_id: number, cb: (user: any, player_id?: number) => void) {
-        this.player_id = player_id;
-        this.cb = cb;
-        this.id = ++last_id;
-        this.remove_callbacks = [];
+    constructor(callback: (player: PlayerCacheEntry) => void) {
+        this.subscriber = new publisher.Subscriber((id, player) => callback(player));
     }
 
-    onRemove(fn: () => void): void {
-        this.remove_callbacks.push(fn);
+    on(players: number | PlayerCacheEntry | Array<number | PlayerCacheEntry>): this {
+        this.subscriber.on(this.to_strings(players));
+        return this;
     }
 
-    remove() {
-        delete listeners[this.player_id][this.id];
-        for (let cb of this.remove_callbacks) {
-            try {
-                cb();
-            } catch (e) {
-                console.error(e);
+    off(players: number | PlayerCacheEntry | Array<number | PlayerCacheEntry>): this {
+        this.subscriber.off(this.to_strings(players));
+        return this;
+    }
+
+    players(): Array<number> {
+        return this.subscriber.channels().map((id) => parseInt(id));
+    }
+
+    private to_strings(
+        players: number | PlayerCacheEntry | Array<number | PlayerCacheEntry>,
+    ): Array<string> {
+        const result: Array<string> = [];
+        if (!(players instanceof Array)) {
+            players = [players];
+        }
+        for (const player of players) {
+            if (typeof player === "number") {
+                result.push(player.toString());
+            } else {
+                result.push(player.id.toString());
             }
         }
+        return result;
     }
 }
 
-function update(player: any, dont_overwrite?: boolean): any {
+export interface PlayerCacheEntry {
+    id: number;
+    country?: string;
+    icon?: string;
+    pro?: boolean;
+    ranking?: number;
+    rating?: number;
+    ratings?: {
+        overall: {
+            rating: number;
+            deviation: number;
+            volatility: number;
+            games_played?: number;
+        };
+    };
+    ui_class?: string;
+    username?: string;
+}
+
+interface FetchEntry {
+    player_id: number;
+    resolve: (value?: any) => void;
+    reject: (reason?: any) => void;
+    required_fields?: Array<string>;
+}
+
+const cache: { [id: number]: PlayerCacheEntry } = {};
+const cache_by_username: { [username: string]: PlayerCacheEntry } = {};
+const active_fetches: { [id: number]: Promise<PlayerCacheEntry> } = {};
+export const nicknames: Array<string> = [];
+
+export function update(player: any, dont_overwrite?: boolean): PlayerCacheEntry | undefined {
     if (Array.isArray(player)) {
-        for (let p of player) {
+        for (const p of player) {
             update(p, dont_overwrite);
         }
         return;
     }
 
-    let id = "user_id" in player ? player.user_id : player.id;
-    if (!(id in cache)) {
-        cache[id] = {};
+    const id = "user_id" in player ? player.user_id : player.id;
+    if (!id) {
+        if (player && player.anonymous) {
+            return;
+        }
+        console.error("Invalid player object", player);
+        return;
     }
-    for (let k in player) {
+
+    if (!(id in cache)) {
+        cache[id] = { id: id };
+    }
+    for (const k in player) {
         if (dont_overwrite && k in cache[id]) {
             continue;
         }
-        cache[id][k] = player[k];
+        (cache[id] as any)[k] = player[k];
     }
-    if (cache[id].username && !(cache[id].username in cache_by_username)) {
-        nicknames.push(cache[id]["username"]);
+    const username = cache[id].username;
+    if (username && !(username in cache_by_username)) {
+        nicknames.push(username);
     }
-    if (cache[id].username) {
-        cache_by_username[cache[id].username] = cache[id];
-    }
-
-    if (id in listeners) {
-        for (let l in listeners[id]) {
-            listeners[id][l].cb(cache[id], id);
-        }
+    if (username) {
+        cache_by_username[username] = cache[id];
     }
 
+    /* these are synonymous but called different things throughout the back end, I am truly sorry. */
+    if ("professional" in player) {
+        cache[id]["pro"] = !!player.professional;
+    }
+    if ("pro" in player) {
+        (cache[id] as any)["professional"] = !!player.pro;
+    }
+
+    publisher.publish(id.toString(), cache[id]);
     return cache[id];
 }
 
-function lookup(player_id: number): any {
+/** Returns the PlayerCacheEntry if we have it loaded already, else null. Does
+ *  not perform a fetch or anything heavy. */
+export function lookup(player_id?: number): PlayerCacheEntry | null {
+    if (!player_id) {
+        return null;
+    }
+
     if (player_id in cache) {
         return cache[player_id];
     }
@@ -96,7 +158,13 @@ function lookup(player_id: number): any {
     return null;
 }
 
-function lookup_by_username(username: string): any {
+/** Returns the PlayerCacheEntry if we have it loaded already, else null. Does
+ *  not perform a fetch or anything heavy. */
+export function lookup_by_username(username?: string): PlayerCacheEntry | null {
+    if (!username) {
+        return null;
+    }
+
     if (username in cache_by_username) {
         return cache_by_username[username];
     }
@@ -104,29 +172,52 @@ function lookup_by_username(username: string): any {
     return null;
 }
 
-function watch(player_id: number, cb: (player: any, player_id?: number) => void): Listener {
-    let listener = new Listener(player_id, cb);
-    if (!(player_id in listeners)) {
-        listeners[player_id] = {};
-    }
-    listeners[player_id][listener.id] = listener;
-
-    let val = lookup(player_id);
-    if (val) {
-        cb(val, player_id);
+export function fetch_by_username(
+    username?: string,
+    required_fields?: Array<string>,
+): Promise<PlayerCacheEntry | null> {
+    const user = lookup_by_username(username);
+    if (!username) {
+        return Promise.reject("invalid player name");
     }
 
-    return listener;
+    if (user) {
+        return fetch(user.id, required_fields);
+    } else {
+        const res = get("players", { username: username }).then((res) => {
+            if (res.results.length) {
+                return fetch(res.results[0].id, required_fields);
+            } else {
+                console.error("Attempted to fetch invalid player name: ", username);
+                cache_by_username[username] = {
+                    id: 0,
+                    username: username,
+                    ui_class: "provisional",
+                    pro: false,
+                };
+                return Promise.reject("invalid player name");
+            }
+        });
+        return res;
+    }
 }
 
-function fetch(player_id: number, required_fields?: Array<string>): Promise<any> {
-    let missing_fields = [];
+export function fetch(
+    player_id?: number,
+    required_fields?: Array<string>,
+): Promise<PlayerCacheEntry> {
+    if (!player_id) {
+        console.error("Attempted to fetch invalid player id: ", player_id);
+        return Promise.reject("invalid player id");
+    }
+
+    const missing_fields: string[] = [];
 
     if (player_id in cache) {
         let have_cached_copy = true;
 
         if (required_fields) {
-            for (let f of required_fields) {
+            for (const f of required_fields) {
                 if (!(f in cache[player_id])) {
                     missing_fields.push(f);
                     have_cached_copy = false;
@@ -138,45 +229,105 @@ function fetch(player_id: number, required_fields?: Array<string>): Promise<any>
         if (have_cached_copy) {
             return Promise.resolve(cache[player_id]);
         }
+
+        debug.log(
+            `Fetching ${player_id} for fields ${missing_fields.join(", ")}.`,
+            cache[player_id],
+        );
+    } else {
+        debug.log(`Fetching ${player_id} because no user information was in our cache.`);
     }
+
     if (player_id in active_fetches) {
         return active_fetches[player_id];
     }
 
-    console.error("Fetching ", player_id, " for fields ", missing_fields);
-
-    return active_fetches[player_id] = new Promise((resolve, reject) => {
-        get(`players/${player_id}`)
-        .then((player) => {
-            delete active_fetches[player_id];
-            update(player);
-            if (required_fields) {
-                for (let field of required_fields) {
-                    if (!(field in cache[player.id])) {
-                        console.warn("Required field ", field, " was not resolved by fetch");
-                        cache[player.id][field] = "[ERROR]";
-                    }
-                }
-            }
-            resolve(cache[player.id]);
-        })
-        .catch((err) => {
-            delete active_fetches[player_id];
-            console.error(err);
-            reject(err);
+    return (active_fetches[player_id] = new Promise((resolve, reject) => {
+        fetch_player.soon({
+            player_id,
+            resolve,
+            reject,
+            required_fields,
         });
-    });
+    }));
 }
 
+const fetch_player = new Batcher<FetchEntry>((fetch_queue) => {
+    while (fetch_queue.length > 0) {
+        const queue = fetch_queue.slice(0, 100);
+        fetch_queue = fetch_queue.slice(100);
 
-export const player_cache = {
-    update: update,
-    lookup: lookup,
-    lookup_by_username: lookup_by_username,
-    nicknames: nicknames,
-    fetch: fetch,
-    watch: watch,
-    Listener: Listener,
-};
+        debug.log(`Batch requesting player info for id ${queue.map((e) => e.player_id).join(",")}`);
 
-export default player_cache;
+        get("/termination-api/players", { ids: queue.map((e) => e.player_id).join(".") })
+            .then((players) => {
+                for (let idx = 0; idx < queue.length; ++idx) {
+                    const player = players[idx];
+                    const resolve = queue[idx].resolve;
+                    const required_fields = queue[idx].required_fields;
+
+                    if ("icon-url" in player) {
+                        /* our API is inconsistent, this just maps one to the other for our convenience on the front end*/
+                        player.icon = user_uploads_url(player["icon-url"]);
+                        player["icon-url"] = player.icon;
+                    }
+
+                    delete active_fetches[player.id];
+                    update(player);
+                    if (required_fields) {
+                        for (const field of required_fields) {
+                            if (!(field in cache[player.id])) {
+                                debug.warn("Required field ", field, " was not resolved by fetch");
+                                (cache[player.id] as any)[field] = "[ERROR]";
+                            }
+                        }
+                    }
+                    try {
+                        resolve(cache[player.id]);
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+            })
+            .catch((err) => {
+                if ("error" in err.responseJSON) {
+                    if (/Player ([0-9]+) not found in cassandra/gi.test(err.responseJSON.error)) {
+                        const err_player_id = Number(
+                            (
+                                /Player ([0-9]+) not found in cassandra/gi.exec(
+                                    err.responseJSON.error,
+                                ) as string[]
+                            )[1],
+                        );
+                        // create a dummy entry for missing player
+                        let idx = 0;
+                        for (; idx < 100; idx++) {
+                            if (queue[idx].player_id === err_player_id) {
+                                break;
+                            }
+                        }
+                        const reject = queue[idx].reject;
+                        const player = {
+                            id: err_player_id,
+                            username: "?player" + err_player_id + "?",
+                            ui_class: "provisional",
+                            pro: false,
+                        };
+                        update(player);
+                        debug.error(err);
+                        reject(err);
+                        return;
+                    }
+                }
+                debug.error(err);
+                for (let idx = 0; idx < queue.length; ++idx) {
+                    delete active_fetches[queue[idx].player_id];
+                    try {
+                        queue[idx].reject(err);
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+            });
+    }
+});

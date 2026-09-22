@@ -1,0 +1,88 @@
+.KibitzRoomSettingsPopover {
+    background: var(--shade5);
+    border: 1px solid var(--shade3);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    color: var(--fg);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+    padding: 0.75rem 0.8rem;
+
+    .KibitzRoomSettingsPopover-title {
+        font-size: 0.9rem;
+        font-weight: 700;
+        line-height: 1.2;
+        padding-bottom: 0.1rem;
+    }
+
+    .KibitzRoomSettingsPopover-fieldLabel {
+        color: var(--text-dimmed);
+        font-size: 0.78rem;
+        font-weight: 700;
+        text-transform: uppercase;
+    }
+
+    .KibitzRoomSettingsPopover-note,
+    .KibitzRoomSettingsPopover-error {
+        font-size: 0.84rem;
+        line-height: 1.35;
+    }
+
+    .KibitzRoomSettingsPopover-owner {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        min-width: 0;
+    }
+
+    .KibitzRoomSettingsPopover-ownerRow {
+        align-items: center;
+        display: flex;
+        gap: 0.35rem;
+        min-width: 0;
+
+        .Player {
+            align-items: center;
+            display: inline-flex;
+            line-height: 1.05;
+        }
+    }
+
+    .KibitzRoomSettingsPopover-ownerAvatar {
+        align-items: center;
+        background: var(--shade2);
+        color: var(--fg);
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 0.56rem;
+        font-weight: bold;
+        height: 16px;
+        justify-content: center;
+        line-height: 1;
+        min-width: 16px;
+        overflow: hidden;
+        text-transform: uppercase;
+    }
+
+    .KibitzRoomSettingsPopover-ownerAvatarIcon {
+        display: block;
+    }
+
+    .KibitzRoomSettingsPopover-note {
+        color: var(--text-dimmed);
+    }
+
+    .KibitzRoomSettingsPopover-error {
+        color: var(--danger);
+    }
+
+    .KibitzRoomSettingsPopover-actions {
+        align-items: center;
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+        flex-wrap: nowrap;
+    }
+}

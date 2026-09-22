@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,103 +16,187 @@
  */
 
 import * as React from "react";
-import {_, pgettext, interpolate} from "translate";
-import {post, get} from "requests";
-import {OGSComponent, Resolver} from "components";
-import {browserHistory} from "react-router";
+import { _ } from "@/lib/translate";
+import { post } from "@/lib/requests";
+import { errorAlerter } from "@/lib/misc";
+import { browserHistory } from "@/lib/ogsHistory";
+import "./GroupCreate.css";
 
-declare var swal;
-
-interface GroupCreateProperties {
+interface GroupCreateState {
+    name: string;
+    require_invitation: boolean;
+    is_public: boolean;
+    hide_details: boolean;
+    admin_only_tournaments: boolean;
 }
 
-export class GroupCreate extends OGSComponent<GroupCreateProperties, any> {
-    refs: {
-        name
-    };
+export class GroupCreate extends React.PureComponent<{}, GroupCreateState> {
+    ref_name = React.createRef<HTMLInputElement>();
 
-    constructor(props) {
+    constructor(props: {}) {
         super(props);
         this.state = {
-            group: {
-                name: "",
-                require_invitation: false,
-                is_public: true,
-                hide_details: false,
-            }
+            name: "",
+            require_invitation: false,
+            is_public: true,
+            hide_details: false,
+            admin_only_tournaments: false,
         };
     }
 
     createGroup() {
-        if (this.state.group.name.trim() !== "") {
-            console.info(this.state.group);
-            post("groups/", this.state.group)
-            .then((group) => {
-                browserHistory.push(`/group/${group.id}`);
-            })
-            .catch((err) => {
-                swal(_("Error creating group"), JSON.parse(err.responseText).error);
-            });
+        if (this.state.name.trim() !== "") {
+            const group = {
+                name: this.state.name,
+                require_invitation: this.state.require_invitation,
+                is_public: this.state.is_public,
+                hide_details: this.state.hide_details,
+                admin_only_tournaments: this.state.admin_only_tournaments,
+            };
+            post("groups/", group)
+                .then((group) => {
+                    browserHistory.push(`/group/${group.id}`);
+                })
+                .catch(errorAlerter);
         } else {
-            this.refs.name.focus();
+            this.ref_name.current?.focus();
         }
     }
 
+    set_name = (ev: React.ChangeEvent<HTMLInputElement>) =>
+        this.setState({ name: ev.target.value });
+    set_is_public = (ev: React.ChangeEvent<HTMLInputElement>) =>
+        this.setState({ is_public: ev.target.checked });
+    set_require_invitation = (ev: React.ChangeEvent<HTMLInputElement>) =>
+        this.setState({ require_invitation: ev.target.checked });
+    set_hide_details = (ev: React.ChangeEvent<HTMLInputElement>) =>
+        this.setState({ hide_details: ev.target.checked });
+    set_admin_only_tournaments = (ev: React.ChangeEvent<HTMLInputElement>) =>
+        this.setState({ admin_only_tournaments: ev.target.checked });
+
     render() {
         return (
-        <div className="GroupCreate">
-            <div className="container" style={{maxWidth: "42em", paddingTop: "5em"}}>
-
-                <div style={{textAlign: "center"}}>
-                    <h1>{_("Excellent, another group!")}</h1>
-                    <p>{_("To begin, please fill out some basic information about your group.")}</p>
-                </div>
-                <div className="well">
-                    <div className="form-horizontal" role="form">
-                        <div className="form-group">
-                            <label className="col-sm-5 control-label" htmlFor="group-create-name">{_("Group Name")}</label>
-                            <div className="col-sm-6">
-                                <input type="text" ref="name" className="form-control" id="group-create-name" value={this.state.group.name} onChange={(ev) => this.upstate("group.name", ev)} placeholder={_("Group Name")}/>
-                            </div>
-                        </div>
-
-                        <div className="form-group">
-                            <label className="col-sm-5 control-label" htmlFor="group-create-public">{_("Open to the public")}</label>
-                            <div className="col-sm-6">
-                                <div className="checkbox">
-                                    <input type="checkbox" id="group-create-public" checked={this.state.group.is_public} onChange={(ev) => this.upstate("group.is_public", ev)}/>
+            <div className="GroupCreate">
+                <div className="container" style={{ maxWidth: "42em", paddingTop: "5em" }}>
+                    <div style={{ textAlign: "center" }}>
+                        <h1>{_("Excellent, another group!")}</h1>
+                        <p>
+                            {_(
+                                "To begin, please fill out some basic information about your group.",
+                            )}
+                        </p>
+                    </div>
+                    <div className="well">
+                        <div className="form-horizontal" role="form">
+                            <div className="form-group">
+                                <label
+                                    className="col-sm-5 control-label"
+                                    htmlFor="group-create-name"
+                                >
+                                    {_("Group Name")}
+                                </label>
+                                <div className="col-sm-6">
+                                    <input
+                                        type="text"
+                                        ref={this.ref_name}
+                                        className="form-control"
+                                        id="group-create-name"
+                                        value={this.state.name}
+                                        onChange={this.set_name}
+                                        placeholder={_("Group Name")}
+                                    />
                                 </div>
                             </div>
-                        </div>
-                        {(!this.state.group.is_public || null) &&
+
                             <div className="form-group">
-                                <label className="col-sm-5 control-label" htmlFor="group-create-disable-invitation">{_("Disable invitation requests")}</label>
+                                <label
+                                    className="col-sm-5 control-label"
+                                    htmlFor="group-create-public"
+                                >
+                                    {_("Open to the public")}
+                                </label>
                                 <div className="col-sm-6">
                                     <div className="checkbox">
-                                        <input type="checkbox" id="group-create-disable-invitation" checked={this.state.group.require_invitation} onChange={(ev) => this.upstate("group.require_invitation", ev)}/>
+                                        <input
+                                            type="checkbox"
+                                            id="group-create-public"
+                                            checked={this.state.is_public}
+                                            onChange={this.set_is_public}
+                                        />
                                     </div>
                                 </div>
                             </div>
-                        }
-                        <div className="form-group">
-                            <label className="col-sm-5 control-label" htmlFor="group-create-hide-details">{_("Hide details from non-members")}</label>
-                            <div className="col-sm-6">
-                                <div className="checkbox">
-                                    <input type="checkbox" id="group-create-hide-details" checked={this.state.group.hide_details} onChange={(ev) => this.upstate("group.hide_details", ev)}/>
+
+                            <div className="form-group">
+                                <label
+                                    className="col-sm-5 control-label"
+                                    htmlFor="group-admin-only-tournaments"
+                                >
+                                    {_("Only admins create tournaments")}
+                                </label>
+                                <div className="col-sm-6">
+                                    <div className="checkbox">
+                                        <input
+                                            type="checkbox"
+                                            id="group-admin-only-tournaments"
+                                            checked={this.state.admin_only_tournaments}
+                                            onChange={this.set_admin_only_tournaments}
+                                        />
+                                    </div>
                                 </div>
                             </div>
-                        </div>
 
-                        <div className="form-group">
-                            <label className="col-sm-5 control-label"></label>
-                            <div className="col-sm-6">
-                                <button className="primary" onClick={() => (this.createGroup())}>{_("Create your group!")}</button>
+                            {(!this.state.is_public || null) && (
+                                <div className="form-group">
+                                    <label
+                                        className="col-sm-5 control-label"
+                                        htmlFor="group-create-disable-invitation"
+                                    >
+                                        {_("Disable invitation requests")}
+                                    </label>
+                                    <div className="col-sm-6">
+                                        <div className="checkbox">
+                                            <input
+                                                type="checkbox"
+                                                id="group-create-disable-invitation"
+                                                checked={this.state.require_invitation}
+                                                onChange={this.set_require_invitation}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            <div className="form-group">
+                                <label
+                                    className="col-sm-5 control-label"
+                                    htmlFor="group-create-hide-details"
+                                >
+                                    {_("Hide details from non-members")}
+                                </label>
+                                <div className="col-sm-6">
+                                    <div className="checkbox">
+                                        <input
+                                            type="checkbox"
+                                            id="group-create-hide-details"
+                                            checked={this.state.hide_details}
+                                            onChange={this.set_hide_details}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="form-group">
+                                <label className="col-sm-5 control-label"></label>
+                                <div className="col-sm-6">
+                                    <button className="primary" onClick={() => this.createGroup()}>
+                                        {_("Create your group!")}
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
         );
     }
 }

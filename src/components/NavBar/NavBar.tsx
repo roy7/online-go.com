@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,589 +16,755 @@
  */
 
 import * as React from "react";
-import {Link, browserHistory} from "react-router";
-import data from "data";
-import {_, current_language, languages} from "translate";
-import {OGSComponent, PlayerIcon} from "components";
-import {post, get, abort_requests_in_flight} from "requests";
-import {acceptGroupInvite, acceptTournamentInvite, rejectGroupInvite, rejectTournamentInvite, ignore} from "misc";
-import {LineText} from "misc-ui";
-import {challenge, createDemoBoard} from "ChallengeModal";
-import {openNewGameModal} from "NewGameModal";
-import {KBShortcut} from "KBShortcut";
-import {LanguagePicker} from "LanguagePicker";
-import {GobanThemePicker} from "GobanThemePicker";
-import {IncidentReportTracker} from "IncidentReportTracker";
-import {NotificationIndicator, TurnIndicator, NotificationList} from "Notifications";
-import {TournamentIndicator} from "Announcements";
-import {FriendIndicator} from "FriendList";
-import {Player} from "Player";
-import player_cache from "player_cache";
+import { Link, useLocation } from "react-router-dom";
+import clsx from "clsx";
 
-declare var Hammer;
+import * as DynamicHelp from "react-dynamic-help";
+import * as data from "@/lib/data";
 
-let body = $(document.body);
+import { _, pgettext } from "@/lib/translate";
+import { PlayerIcon } from "@/components/PlayerIcon";
+import { LineText } from "@/components/misc-ui";
+import { LanguagePicker } from "@/components/LanguagePicker";
+import { GobanThemePicker } from "@/components/GobanThemePicker";
+import { IncidentReportIndicator } from "@/components/IncidentReportTracker";
+import { KBShortcut } from "@/components/KBShortcut";
+import { NotificationList, notification_manager } from "@/components/Notifications";
+import { TurnIndicator } from "@/components/TurnIndicator";
+import { NotificationIndicator } from "@/components/NotificationIndicator";
+import { TournamentIndicator } from "@/components/Announcements";
+import { FriendIndicator } from "@/components/FriendList";
+import { ChatIndicator } from "@/components/Chat";
+import { GoTVIndicator } from "@/views/GoTV";
+import { get } from "@/lib/requests";
+import { Menu, MenuContext } from "./Menu";
 
-function _update_theme(theme) {
-    if (body.hasClass(theme)) {
-        return;
-    }
-    body.removeClass("light dark");
-    body.addClass(theme);
+import { logout } from "@/lib/auth";
+import { useUser, useData } from "@/lib/hooks";
+import { OmniSearch } from "./OmniSearch";
+import { Hamburger } from "./Hamburger";
+import { forwardRef, useId, useState } from "react";
+import { MODERATOR_POWERS } from "@/lib/moderation";
+import { openDemoBoardModal } from "../DemoBoardModal";
+import "./NavBar.css";
+
+function setTheme(theme: string) {
+    data.set("theme", theme, data.Replication.REMOTE_OVERWRITES_LOCAL);
 }
 
-function previewTheme(theme) {
-    _update_theme(theme);
-}
-function exitThemePreview() {
-    _update_theme(data.get("theme"));
-}
-function setTheme(theme) {
-    data.set("theme", theme);
-    _update_theme(theme);
-}
 function toggleTheme() {
-    if (data.get("theme") === "dark") {
+    const currentTheme = document.documentElement.dataset.theme;
+    if (currentTheme === "dark" || currentTheme === "accessible") {
         setTheme("light");
     } else {
         setTheme("dark");
     }
 }
-let setThemeLight = setTheme.bind(null, "light");
-let setThemeDark = setTheme.bind(null, "dark");
-function logout() {
-    get("/api/v0/logout").then((config) => {
-        data.set("config", config);
-        browserHistory.push("/");
-    });
-}
+const setThemeLight = setTheme.bind(null, "light");
+const setThemeDark = setTheme.bind(null, "dark");
+const setThemeAccessible = setTheme.bind(null, "accessible");
+const setThemeSystem = setTheme.bind(null, "system");
 
-delete Hammer.defaults.cssProps.userSelect;
-let hammertime = new Hammer(document.body, {
-    cssProps: {
-        userSelect: "auto",
-    }
-});
+export function NavBar(): React.ReactElement {
+    const user = useUser();
+    const location = useLocation();
 
+    const [search, setSearch] = React.useState<string>("");
+    const [search_focus, setSearchFocus] = React.useState<boolean>(false);
+    const [omniMouseOver, setOmniMouseOver] = React.useState<boolean>(false);
+    const [activeMenu, setActiveMenu] = useState<null | string>(null);
+    const [hamburger_expanded, setHamburgerExpanded] = React.useState(false);
+    const search_input = React.useRef<HTMLInputElement>(null);
+    const [force_nav_close, setForceNavClose] = React.useState(false);
+    const [banned_user_id] = useData("appeals.banned_user_id");
+    const [kibitzShowInNav, setKibitzShowInNav] = React.useState<boolean>(false);
 
-export class NavBar extends OGSComponent<{}, any> {
-    refs: {
-        input: any;
-        notification_list: NotificationList;
-        omnisearch_input;
+    React.useEffect(() => {
+        let cancelled = false;
+        get("kibitz/nav-config")
+            .then((res: { show_in_nav?: boolean }) => {
+                if (!cancelled) {
+                    setKibitzShowInNav(Boolean(res?.show_in_nav));
+                }
+            })
+            .catch(() => {
+                // Network blip / endpoint missing — leave the link hidden.
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const { registerTargetItem } = React.useContext(DynamicHelp.Api);
+
+    const { /* ref: toggleRightNavButton, */ used: rightNavToggled } =
+        registerTargetItem("toggle-right-nav");
+
+    const { ref: settingsNavLink } = registerTargetItem("settings-nav-link");
+
+    const notifications_active = activeMenu === "notifications";
+    const right_nav_active = activeMenu === "right-nav";
+
+    const closeNavbar = () => {
+        setActiveMenu(null);
+        setSearch("");
     };
 
-    constructor(props) {
-        super(props);
-        this.state = {
-            user: data.get("config.user"),
-            left_nav_active: false,
-            right_nav_active: false,
-            tournament_invites: [],
-            tournaments: [],
-            ladders: [],
-            group_invites: [],
-            groups: [],
-
-            omnisearch_string: "",
-            omnisearch_loading: false,
-            omnisearch_sitemap: [],
-            omnisearch_players: [],
-            omnisearch_groups: [],
-            omnisearch_tournaments: [],
-
-
-            path: window.location.pathname,
-        };
-
-        this.closeNavbar = this.closeNavbar.bind(this);
-        this.toggleLeftNav = this.toggleLeftNav.bind(this);
-        this.toggleRightNav = this.toggleRightNav.bind(this);
-        this.toggleDebug = this.toggleDebug.bind(this);
-    }
-
-    componentWillMount() {
-        data.watch("config.user", (user) => this.setState({"user": user}));
-
-        browserHistory.listen(location => {
-            this.closeNavbar();
-            this.setState({path: location.pathname});
-        });
-
-        hammertime.on("swipeleft", (ev) => {
-            if (ev.pointerType === "mouse") {
-                return;
-            }
-
-            if (this.state.left_nav_active) {
-                this.toggleLeftNav();
-            }
-        });
-        hammertime.on("swiperight", (ev) => {
-            if (ev.pointerType === "mouse") {
-                return;
-            }
-
-            if (!this.state.left_nav_active) {
-                this.toggleLeftNav();
-            }
-        });
-    }
-
-    closeNavbar() {
-        this.setState({
-            left_nav_active: false,
-            right_nav_active: false
-        });
-        this.clearOmnisearch();
-    }
-
-    toggleLeftNav(ev?) {
-        if (!this.state.left_nav_active) {
-            if (ev && ev.type === "keydown") {
-                this.refs.omnisearch_input.focus();
-            }
-        } else {
-            this.clearOmnisearch();
+    const toggleNotifications = () => {
+        if (!notifications_active) {
+            notification_manager.event_emitter.emit("notification-count", 0);
         }
-        this.setState({left_nav_active: !this.state.left_nav_active});
-    }
-    toggleRightNav() {
-        if (this.state.right_nav_active === false) {
-            this.refs.notification_list.markAllAsRead();
+        setActiveMenu(notifications_active ? null : "notifications");
+    };
+
+    const toggleRightNav = () => {
+        setActiveMenu(right_nav_active ? null : "right-nav");
+        rightNavToggled();
+    };
+
+    const toggleHamburgerExpanded = () => {
+        if (hamburger_expanded) {
+            setSearch("");
         }
-        this.setState({right_nav_active: !this.state.right_nav_active});
-    }
+        setActiveMenu(null);
+        setHamburgerExpanded(!hamburger_expanded);
+    };
 
-    toggleDebug() {
-        data.set("debug", !data.get("debug", false));
-        window.location.reload();
-    }
-    toggleAdOverride() {
-        data.set("ad-override", !data.get("ad-override", false));
-        window.location.reload();
-    }
-    newGame = () => {
-        this.closeNavbar();
-        openNewGameModal();
-    }
-    newDemo = () => {
-        this.closeNavbar();
-        createDemoBoard();
-    }
+    const newDemo = () => {
+        closeNavbar();
+        openDemoBoardModal({});
+    };
 
-    clearOmnisearch() {
-        this.abortOmnisearch();
-        this.setState({
-            omnisearch_string: "",
-            omnisearch_players: [],
-            omnisearch_groups: [],
-            omnisearch_tournaments: [],
-            omnisearch_sitemap: [],
-        });
-        $(this.refs.omnisearch_input).blur();
-    }
-    abortOmnisearch() {
-        abort_requests_in_flight("ui/omniSearch");
-    }
-    updateOmnisearch = (ev) => {
-        try {
-            let q = ev.target.value || "";
+    React.useEffect(() => {
+        setForceNavClose(true);
+        setTimeout(() => {
+            setForceNavClose(false);
+        }, 50);
+    }, [location]);
 
-            if (q.trim() !== this.state.omnisearch_string.trim()) {
-                this.abortOmnisearch();
-            } else {
-                this.setState({ omnisearch_string: q });
-                return;
-            }
-            if (q === "") {
-                this.setState({
-                    omnisearch_string: q,
-                    sitemap: [],
-                });
-            } else {
-                this.setState({
-                    omnisearch_loading: true,
-                    omnisearch_string: q,
-                    omnisearch_sitemap: match_sitemap(q),
-                    omnisearch_players: [],
-                    omnisearch_tournaments: [],
-                    omnisearch_groups: [],
-                });
+    React.useEffect(() => {
+        setHamburgerExpanded(false);
+        closeNavbar();
+    }, [location.key]);
 
-                get("ui/omniSearch", {q: q.trim()})
-                .then((res) => {
-                    player_cache.update(res.players);
-                    this.setState({
-                        omnisearch_loading: false,
-                        omnisearch_players: res.players,
-                        omnisearch_tournaments: res.tournaments,
-                        omnisearch_groups: res.groups,
-                    });
-                })
-                .catch(ignore);
-            }
-        } catch (e) {
-            console.log(e);
-            // ignore
-        }
-    }
+    //const valid_user = user.anonymous ? null : user;
 
-    onOmnisearchKeyPress = (ev) => {
-        try {
-            if (ev.keyCode === 27) {
-                this.clearOmnisearch();
-            } else if (ev.keyCode === 192) { /* grav */
-                if (this.state.omnisearch_string === "") {
-                    this.clearOmnisearch();
+    // Don't show the sign-in link at the top if they arrived to the welcome page
+    // (aka ChallengeLinkLanding)
+    // because that page has special treatment of sign-in, which takes them
+    // to the challenge that they accepted via a challenge link, after logging them in.
+    // We don't want to offer them a way of bailing out and signing in outside that.
+    // (If they manually navigate away, it's no real harm, it's just that they won't
+    //  get taken to the challenge they were in the middle of accepting).
+
+    const show_sign_in =
+        !window.location.pathname.includes("/welcome") && // a challenge link page is being shown
+        !window.location.hash.includes("/welcome"); // the sign-in with redirect to challenge accept
+
+    const show_sign_up_button = !window.location.pathname.includes("/register");
+    const show_log_in_link = !window.location.pathname.includes("/sign-in");
+
+    const show_appeal_box = !window.location.pathname.includes("/appeal");
+
+    const searchInputId = useId();
+
+    return (
+        <MenuContext.Provider value={{ setActiveMenu, activeMenu }}>
+            <header
+                className={
+                    "NavBar" +
+                    (hamburger_expanded ? " hamburger-expanded" : "") +
+                    (force_nav_close ? " force-nav-close" : "")
                 }
-            }
-        } catch (e) {
-            console.log(e);
-            // ignore
-        }
-    }
+            >
+                <KBShortcut shortcut="`" action={() => search_input.current?.focus()} />
 
+                {banned_user_id && show_appeal_box ? <BanIndicator /> : null}
 
-    render() {
-        let user = this.state.user.anonymous ? null : this.state.user;
-        let anon = this.state.user.anonymous;
-        let tournament_invites = this.state.tournament_invites;
-        let tournaments = this.state.tournaments;
-        let ladders = this.state.ladders;
-        let group_invites = this.state.group_invites;
-        let groups = this.state.groups;
+                <Hamburger onClick={toggleHamburgerExpanded} open={hamburger_expanded} />
 
-        let show_debug = data.get("user").is_superuser;
-        let debug = data.get("debug", false);
-        let no_results = false;
+                <nav className="left" aria-label={_("Main Navigation")}>
+                    <ul>
+                        <li>
+                            <Link to="/" className="Menu-title">
+                                <span className="ogs-nav-logo" aria-hidden={true} />
+                                {_("Home")}
+                            </Link>
+                        </li>
+                        <Menu
+                            menuId="play"
+                            title={_("Play")}
+                            to="/play"
+                            openMenuLabel={_("Open play menu")}
+                        >
+                            <MenuLink
+                                title={_("Play")}
+                                to="/play"
+                                icon={<i className="ogs-goban" />}
+                            />
+                            <MenuLink
+                                title={_("Tournaments")}
+                                to="/tournaments"
+                                icon={<i className="fa fa-trophy" />}
+                            />
+                            <MenuLink
+                                title={_("Ladders")}
+                                to="/ladders"
+                                icon={<i className="fa fa-list-ol" />}
+                            />
+                        </Menu>
+                        <Menu
+                            menuId="learn"
+                            title={_("Learn")}
+                            to="/learn-to-play-go"
+                            openMenuLabel={_("Open learn menu")}
+                        >
+                            <MenuLink
+                                title={_("Learn to play Go")}
+                                to="/learn-to-play-go"
+                                icon={<i className="fa fa-graduation-cap" />}
+                            />
+                            <MenuLink
+                                title={_("Sign up for AI game reviews")}
+                                to="/supporter"
+                                icon={<i className="fa fa-star" />}
+                            />
+                            <MenuLink
+                                title={_("Puzzles")}
+                                to="/puzzles"
+                                icon={<i className="fa fa-puzzle-piece" />}
+                            />
+                            <MenuLink
+                                title={_("Other Go Resources")}
+                                to="/docs/other-go-resources"
+                                icon={<i className="fa fa-link" />}
+                            />
+                        </Menu>
+                        <Menu
+                            menuId="watch"
+                            title={_("Watch")}
+                            to="/observe-games"
+                            openMenuLabel={_("Open watch menu")}
+                        >
+                            <MenuLink
+                                title={_("Games")}
+                                to="/observe-games"
+                                icon={<i className="fa fa-eye" />}
+                            />
+                            {kibitzShowInNav && (
+                                <MenuLink
+                                    title={_("Kibitz")}
+                                    to="/kibitz"
+                                    icon={<i className="ogs-kibitz" />}
+                                />
+                            )}
+                            <MenuLink title={"GoTV"} to="/gotv" icon={<i className="fa fa-tv" />} />
+                        </Menu>
+                        <Menu
+                            menuId="community"
+                            title={_("Community")}
+                            to="/chat"
+                            openMenuLabel={_("Open community menu")}
+                        >
+                            <MenuLink
+                                title={_("Forums")}
+                                to="https://forums.online-go.com/"
+                                icon={<i className="fa fa-comments" />}
+                                target="_blank"
+                                external={true}
+                            />
+                            <MenuLink
+                                title={_("Chat")}
+                                to="/chat"
+                                icon={<i className="fa fa-comment-o" />}
+                            />
+                            <MenuLink
+                                title={_("Groups")}
+                                to="/groups"
+                                icon={<i className="fa fa-users" />}
+                            />
+                            <MenuLink
+                                title={_("What's New")}
+                                to="/whats-new"
+                                icon={<i className="fa fa-bullhorn" />}
+                            />
+                            <MenuLink
+                                title={_("Support OGS")}
+                                to="/supporter"
+                                icon={<i className="fa fa-star" />}
+                            />
+                            <MenuLink
+                                title={pgettext(
+                                    "Request an OGS prize sponsorship for a tournament",
+                                    "Sponsorship Request",
+                                )}
+                                to="/sponsorship-request"
+                                icon={<i className="fa fa-trophy" />}
+                            />
+                            <MenuLink
+                                title={_("About")}
+                                to="/docs/about"
+                                icon={<i className="fa fa-info-circle" />}
+                            />
+                            <MenuLink
+                                title={_("GitHub")}
+                                to="https://github.com/online-go/online-go.com/"
+                                icon={<i className="fa fa-github" />}
+                                target="_blank"
+                                external={true}
+                            />
+                            <MenuLink
+                                title={_("Documentation & FAQ")}
+                                to="https://github.com/online-go/online-go.com/wiki"
+                                icon={<i className="fa fa-question-circle" />}
+                                target="_blank"
+                                external={true}
+                            />
+                        </Menu>
+                        <Menu
+                            menuId="tools"
+                            title={_("Tools")}
+                            openMenuLabel={_("Open tools menu")}
+                        >
+                            <MenuLink
+                                title={_("Joseki")}
+                                to="/joseki"
+                                icon={<i className="fa fa-sitemap" />}
+                            />
+                            {user.anonymous ? null : (
+                                <MenuLink
+                                    title={_("Demo Board")}
+                                    onClick={newDemo}
+                                    icon={<i className="fa fa-plus" />}
+                                />
+                            )}
+                            {user.anonymous ? null : (
+                                <MenuLink
+                                    title={_("SGF Library")}
+                                    to={`/library/${user.id}`}
+                                    icon={<i className="fa fa-book" />}
+                                />
+                            )}
 
-        let omnisearch_searching = false;
-        try {
-            omnisearch_searching = !!this.refs.omnisearch_input.value.trim();
-        } catch (e) {
-            // ignore
-        }
+                            <MenuLink
+                                title={_("Rating Calculator")}
+                                to="/rating-calculator"
+                                icon={<i className="fa fa-calculator" />}
+                            />
 
-        let omnisearch_result_count =
-            this.state.omnisearch_players.length +
-            this.state.omnisearch_tournaments.length +
-            this.state.omnisearch_groups.length +
-            this.state.omnisearch_sitemap.length ;
+                            <MenuLink
+                                title={_("Contribute To Translation")}
+                                to="https://translate.online-go.com/projects/ogs/"
+                                icon={<i className="fa fa-globe" />}
+                                target="_blank"
+                                external={true}
+                            />
 
-        return (
-        <div id="NavBar" className={(this.state.left_nav_active || this.state.right_nav_active) ? "active" : ""}>
-            <KBShortcut shortcut="`" action={this.toggleLeftNav}/>
-            <KBShortcut shortcut="alt-`" action={this.toggleRightNav}/>
-            <KBShortcut shortcut="shift-`" action={this.toggleRightNav}/>
-            <KBShortcut shortcut="escape" action={this.closeNavbar}/>
+                            {!user.anonymous && (
+                                <MenuLink
+                                    title={_("Reports Center")}
+                                    to="/reports-center"
+                                    icon={<i className="fa fa-exclamation-triangle" />}
+                                />
+                            )}
+                            {user.is_moderator && (
+                                <MenuLink
+                                    title={_("Moderator Center")}
+                                    to="/moderator"
+                                    icon={<i className="fa fa-gavel" />}
+                                />
+                            )}
+                            {user.is_moderator && (
+                                <MenuLink
+                                    title={_("Appeals Center")}
+                                    to="/appeals-center"
+                                    icon={<i className="fa fa-gavel" />}
+                                />
+                            )}
+                            {(user.is_moderator ||
+                                (user.moderator_powers & MODERATOR_POWERS.AI_DETECTOR) !== 0) && (
+                                <MenuLink
+                                    title={_("AI Detection")}
+                                    to="/moderator/fair-play-search?mode=basic"
+                                    icon={<i className="fa fa-search" />}
+                                />
+                            )}
+                            {(user.is_moderator ||
+                                (user.moderator_powers & MODERATOR_POWERS.AI_DETECTOR) !== 0) && (
+                                <MenuLink
+                                    title={_("Recently Blocked")}
+                                    to="/moderator/recently-blocked"
+                                    icon={<i className="fa fa-ban" />}
+                                />
+                            )}
+                            {(user.is_moderator ||
+                                (user.moderator_powers & MODERATOR_POWERS.AI_DETECTOR) !== 0) && (
+                                <MenuLink
+                                    title={_("Fair Play System")}
+                                    to="/moderator/fair-play"
+                                    icon={<i className="fa fa-code" />}
+                                />
+                            )}
+                            {(user.is_moderator ||
+                                (user.moderator_powers & MODERATOR_POWERS.AI_DETECTOR) !== 0) && (
+                                <MenuLink
+                                    title={_("Fair Play Search")}
+                                    to="/moderator/fair-play-search"
+                                    icon={<i className="fa fa-search" />}
+                                />
+                            )}
+                            {(user.is_moderator ||
+                                (user.moderator_powers & MODERATOR_POWERS.AI_DETECTOR) !== 0) && (
+                                <MenuLink
+                                    title={_("Fair Play Actions")}
+                                    to="/moderator/fair-play-actions"
+                                    icon={<i className="fa fa-gavel" />}
+                                />
+                            )}
+                            {user.is_moderator && (
+                                <MenuLink
+                                    title="Firewall"
+                                    to="/admin/firewall"
+                                    icon={<i className="fa fa-fire-extinguisher" />}
+                                />
+                            )}
+                            {(user.is_moderator || user.is_announcer) && (
+                                <MenuLink
+                                    title={_("Announcement Center")}
+                                    icon={<i className="fa fa-bullhorn" />}
+                                    to="/announcement-center"
+                                />
+                            )}
+                            {user.is_superuser && (
+                                <MenuLink
+                                    title="Prize Batches"
+                                    icon={<i className="fa fa-trophy" />}
+                                    to="/prize-batches"
+                                />
+                            )}
+                            {user.is_superuser && (
+                                <MenuLink
+                                    title="Admin"
+                                    icon={<i className="fa fa-wrench" />}
+                                    to={adminInterfaceUrl()}
+                                    external={true}
+                                />
+                            )}
+                        </Menu>
+                        <Menu
+                            menuId="setting-mobile"
+                            title={_("Settings")}
+                            to="/settings"
+                            className="mobile-only"
+                            openMenuLabel={_("Open settings menu")}
+                        >
+                            <MenuLink
+                                title={_("Profile")}
+                                to={`/user/view/${user.id}`}
+                                icon={<PlayerIcon user={user} size={16} />}
+                            />
 
-            <span className="ogs-nav-logo-container" onClick={this.toggleLeftNav}>
-                <i className="fa fa-bars"/>
-                <span className="ogs-nav-logo"/>
-            </span>
+                            <MenuLink
+                                title={_("Settings")}
+                                to="/user/settings"
+                                icon={<i className="fa fa-gear" />}
+                                ref={settingsNavLink}
+                            />
 
-
-            <section className="left">
-                {(!this.state.user.anonymous || null) && <Link to="/overview">{_("Home")}</Link>}
-                {user && <Link to="/play">{_("Play")}</Link>}
-                <Link to="/observe-games">{_("Watch")}</Link>
-                <Link to="/chat">{_("Chat")}</Link>
-                <Link to="/puzzles">{_("Puzzles")}</Link>
-                <Link to="/tournaments">{_("Tournaments")}</Link>
-                <Link to="/ladders">{_("Ladders")}</Link>
-                <Link to="/groups">{_("Groups")}</Link>
-                <Link to="/leaderboards">{_("Leaderboards")}</Link>
-                <a target="_blank" href="https://forums.online-go.com/">{_("Forums")}</a>
-                {/*
-                <a href='https://ogs.readme.io/'>{_("Help")}</a>
-                */}
-            </section>
-
-            { this.state.user.anonymous ?
-                <section className="right">
-                    <i className="fa fa-adjust" onClick={toggleTheme} />
-                    <LanguagePicker />
-                    <Link className="sign-in" to={"/sign-in#" + this.state.path}>{_("Sign In")}</Link>
-                </section>
-                :
-                <section className="right">
-                    <IncidentReportTracker />
-                    <TournamentIndicator />
-                    <FriendIndicator />
-                    <TurnIndicator />
-                    <span className="icon-container" onClick={this.toggleRightNav}>
-                        <NotificationIndicator />
-                        <PlayerIcon user={this.state.user} size="64"/>
-                        <i className="fa fa-caret-down" />
-                    </span>
-                </section>
-            }
-
-            {/*
-
-                <Link to='/'>Incident Reports</Link>
-                <Link to='/'>Tournament Icon</Link>
-                <Link to='/'>Friends Online</Link>
-                <Link to='/'>Search</Link>
-                <Link to='/'>Move Indicator</Link>
-                <Link to='/'>Notification</Link>
-
-            */}
-            
-
-            <div className={"nav-menu-modal-backdrop " + ((this.state.left_nav_active || this.state.right_nav_active) ? "active" : "")} onClick={this.closeNavbar}/>
-
-            {/* Right Nav */}
-            {user &&
-            <div className={"rightnav " + (this.state.right_nav_active ? "active" : "")}>
-                <NotificationList ref="notification_list" />
-
-                <LineText>{_("Theme")}</LineText>
-
-                <div className="theme-selectors">
-                    <button className="theme-button light"
-                        onClick={setThemeLight}
-                        ><i className="fa fa-sun-o"/></button>
-                    <button className="theme-button dark"
-                        onClick={setThemeDark}
-                        ><i className="fa fa-moon-o"/></button>
-                </div>
-
-                <div className="theme-selectors">
-                    <GobanThemePicker />
-                </div>
-
-                {(show_debug || null) && <LineText>{_("Debug")}</LineText>}          
-                {(show_debug || null) &&
-                    <div style={{textAlign: "center"}}>
-                        <button className={debug ? "sm info" : "sm"} onClick={this.toggleDebug}>{debug ? "Turn debugging off" : "Turn debugging on"}</button>
-                        <button className={debug ? "sm info" : "sm"} onClick={this.toggleAdOverride}>{data.get("ad-override", false) ? "Turn ads off" : "Turn ads on"}</button>
-                    </div>
-                }          
-            </div>
-            }
-
-
-            {/* Left Nav */}
-            <div className={"leftnav " + (this.state.left_nav_active ? "active" : "")}>
-                <input ref="omnisearch_input" type="text"
-                    className="OmniSearch-input"
-                    value={this.state.omnisearch_string}
-                    onKeyDown={this.onOmnisearchKeyPress} onChange={this.updateOmnisearch} placeholder={_("Search")} />
-
-                {(!omnisearch_searching || null) && /* {{{ */
-                    <ul id="items">
-                        {user && <li><Link to="/overview"><i className="fa fa-home"></i> {_("Home")}</Link></li>}
-                        {anon && <li><Link to="/sign-in"><i className="fa fa-sign-in"></i> {_("Sign In")}</Link></li>}
-                        {user && <li><Link to="/play"><i className="ogs-goban"></i> {_("Play")}</Link></li>}
-                        {user && <li><span className="fakelink" onClick={this.newGame}><i className="fa fa-plus"></i> {_("New Game")}</span></li>}
-                        {user && <li><span className="fakelink" onClick={this.newDemo}><i className="fa fa-plus"></i> {_("Demo Board")}</span></li>}
-                        <li><Link to="/observe-games"><i className="fa fa-eye"></i> {_("Games")}</Link></li>
-                        <li><Link to="/leaderboards"><i className="fa fa-list-ol"></i> {_("Leaderboards")}</Link></li>
-                        <li><Link to="/chat"><i className="fa fa-comment-o"></i> {_("Chat")}</Link></li>
-                        <li className="divider"></li>
-                        {/*
-                        <li ng-if='::global_user'><Link to='/mail'><i className='fa fa-envelope'></i> {_("Mail")}
-                            <ogs-on-ui-push event='mail-update' action='mail_unread_count = data["unread-count"]'></ogs-on-ui-push>
-                            <span ng-if='mail_unread_count > 0' style='font-weight: bold; display: inline;'> ({mail_unread_count})</span>
-                        </Link></li>
-                        */}
-
-                        {/* <li><Link to='/learn-to-play-go'><i className='fa fa-graduation-cap'></i> {_("Learn to play Go")}</Link></li> */}
-                        <li><Link to="/puzzles"><i className="fa fa-puzzle-piece"></i> {_("Puzzles")}</Link></li>
-                        {/* <li><Link to='/library'><i className='fa fa-university'></i> {_("Server Library")}</Link></li> */}
-                        {user && <li><Link to={`/library/${user.id}`}><i className="fa fa-book"></i> {_("SGF Library")}</Link></li>}
-                        {/* {user && <li><Link to='/library/game-history'><i className='fa fa-archive'></i> {_("Game History")}</Link></li>} */}
-
-                        {/* <li className='divider'></li> */}
-
-                        <li><Link to="/tournaments"><i className="fa fa-trophy"></i>{_("Tournaments")}</Link></li>
-                        <li><Link to="/ladders"><i className="fa fa-list-ol"></i>{_("Ladders")}</Link></li>
-                        <li><Link to="/groups"><i className="fa fa-users"></i>{_("Groups")}</Link></li>
-                        <li><Link to="http://forums.online-go.com/" target="_blank"><i className="fa fa-comments"></i>{_("Forums")}</Link></li>
-                        <li><Link to="/docs/about"><i className="fa fa-question-circle"></i>{_("About")}</Link></li>
-                        <li><Link to="/docs/other-go-resources"><i className="fa fa-link"></i>{_("Other Go Resources")}</Link></li>
-
-                        {user && <li className="divider"></li>}
-                        {user && <li><Link to={`/user/view/${user.id}`}><i className="fa fa-user"></i> {_("Profile")}</Link></li>}
-                        {user && <li><Link to="/user/settings"><i className="fa fa-gear"></i> {_("Settings")}</Link></li>}
-                        {user && <li><Link to="/user/supporter"><i className="fa fa-star"></i> {_("Support OGS")}</Link></li>}
-                        {user && <li><span className="fakelink" onClick={logout}><i className="fa fa-sign-out"></i> {_("Logout")}</span></li>}
-
-
-
-                        {user && user.is_moderator && <li className="divider"></li>}
-                        {user && user.is_moderator && <li><Link className="admin-link" to="/moderator"><i className="fa fa-gavel"></i> {_("Moderator Center")}</Link></li>}
-                        {user && user.is_moderator && <li><Link className="admin-link" to="/announcement-center"><i className="fa fa-bullhorn"></i> {_("Announcement Center")}</Link></li>}
-                        {user && user.is_superuser && <li><Link className="admin-link" to="/admin"><i className="fa fa-wrench"></i> Admin</Link></li>}
-
-                        {(tournament_invites.length || tournaments.length || false) && <li className="divider"></li>}
-                        {(tournament_invites.length || tournaments.length || false) &&
-                            <ul>
-                                <li><h5>{_("Tournaments")}</h5></li>
-                                {tournament_invites.map((ti, idx) => (
-                                    <li key={idx}>
-                                        <img src={ti.icon} height="15" width="15"/> 
-                                        <i className="fa fa-check accept clickable" onClick={() => acceptTournamentInvite(ti.id)}></i>
-                                        <i className="fa fa-times reject clickable" onClick={() => rejectTournamentInvite(ti.id)}></i>
-                                        <Link to={`/tournament/${ti.tournament_id}/`} title={ti.message}> {ti.name}</Link>
-                                    </li>
-                                ))}
-                                {tournaments.map((tournament, idx) => (
-                                    <li key={idx}>
-                                        <Link to={`/tournament/${tournament.id}/`}><img src={tournament.icon} height="15" width="15"/> {tournament.name}</Link>
-                                    </li>
-                                ))}
-                            </ul>
-                        }
-                        {(ladders.length || false) && <li className="divider"></li>}
-                        {(ladders.length || false) &&
-                            <ul>
-                                <li><h5>{_("Ladders")}</h5></li>
-                                {ladders.map((ladder, idx) => (
-                                    <li key={idx} className="group">
-                                        <Link to={`/ladder/${ladder.id}/`}>#{ladder.rank} <img src={ladder.icon} height="15" width="15"/> {_(ladder.name)}</Link>
-                                    </li>
-                                ))}
-                            </ul>
-                        }
-                        {(group_invites.length || groups.length || false) && <li className="divider"></li>}
-                        {(group_invites.length || groups.length || false) &&
-                            <ul>
-                                <li><h5>{_("Groups")}</h5></li>
-
-                                {group_invites.map((gi, idx) => (
-                                    <li key={idx} className="invite">
-                                        <img src={gi.icon} height="15" width="15"/> 
-                                        <i className="fa fa-check accept clickable" onClick={() => acceptGroupInvite(gi.id)}></i>
-                                        <i className="fa fa-times reject clickable" onClick={() => rejectGroupInvite(gi.id)}></i>
-                                        <Link to={`/group/${gi.group_id}/`}> {gi.name}</Link>
-                                    </li>
-                                ))}
-                                {groups.map((group, idx) => (
-                                    <li key={idx} className="group">
-                                        <Link to={`/group/${group.id}/`}><img src={group.icon} height="15" width="15"/> {group.name}</Link>
-                                    </li>
-                                ))}
-                            </ul>
-                        }
+                            <MenuLink
+                                title={_("Sign out")}
+                                onClick={logout}
+                                icon={<i className="fa fa-power-off" />}
+                            />
+                        </Menu>
                     </ul>
-                /* }}} */}
-                {(omnisearch_searching || null) && /* {{{ */
-                    <div className="OmniSearch-results">
-                        {(this.state.omnisearch_sitemap.length || null) &&
-                            <div>
-                                <h3>{_("Site")}</h3>
-                                {this.state.omnisearch_sitemap.map((e, idx) => (
-                                    <div key={idx}>
-                                        {e[1][0] === "/"
-                                            ? <Link to={e[1]}>{e[0]}</Link>
-                                            : <a href={e[1]} target="_blank">{e[0]}</a>
-                                        }
-                                    </div>
-                                ))}
-                            </div>
-                        }
-                        {(this.state.omnisearch_loading || null) &&
-                            <div className="loading">
-                                {_("Loading...")}
-                            </div>
-                        }
-                        {(!this.state.omnisearch_loading && omnisearch_result_count === 0 || null) &&
-                            <div className="no-results">
-                                {_("No results.") /* translators: No search results */}
-                            </div>
-                        }
-                                
-                        {(this.state.omnisearch_players.length || null) &&
-                            <div>
-                                <h3>{_("Players")}</h3>
-                                {this.state.omnisearch_players.map((e, idx) => (
-                                    <div key={idx}><Player user={e} icon rank /></div>
-                                ))}
-                            </div>
-                        }
-                        {(this.state.omnisearch_groups.length || null) &&
-                            <div>
-                                <h3>{_("Groups")}</h3>
-                                {this.state.omnisearch_groups.map((e, idx) => (
-                                    <div key={idx}>
-                                        <img src={e.icon}/> <Link to={`/group/${e.id}`}>{e.name}</Link>
-                                    </div>
-                                ))}
-                            </div>
-                        }
-                        {(this.state.omnisearch_tournaments.length || null) &&
-                            <div>
-                                <h3>{_("Tournaments")}</h3>
-                                {this.state.omnisearch_tournaments.map((e, idx) => (
-                                    <div key={idx}>
-                                        <img src={e.icon}/> <Link to={`/tournament/${e.id}`}>{e.name}</Link>
-                                    </div>
-                                ))}
-                            </div>
-                        }
-                        
+                </nav>
+
+                <section className="center OmniSearch-container">
+                    <div className="OmniSearch-input-container">
+                        <label htmlFor={searchInputId}>
+                            <i aria-hidden={true} className="fa fa-search" />
+                            <span className="sr-only">{_("Search the site")}</span>
+                        </label>
+
+                        <input
+                            id={searchInputId}
+                            type="text"
+                            className="OmniSearch-input"
+                            ref={search_input}
+                            value={search}
+                            autoComplete="off"
+                            onChange={(ev) => setSearch(ev.target.value)}
+                            onKeyUp={(ev) => {
+                                if (ev.key === "Escape") {
+                                    setSearch("");
+                                    (ev.target as HTMLInputElement).blur();
+                                }
+                            }}
+                            onFocus={() => setSearchFocus(true)}
+                            onBlur={() => setSearchFocus(false)}
+                            placeholder={_("Search")}
+                        />
                     </div>
-                /* }}} */}
-            </div>
-        </div>
-        );
-    }
+                    {(search_focus || omniMouseOver) && (
+                        <OmniSearch
+                            search={search}
+                            onMouseOver={() => setOmniMouseOver(true)}
+                            onMouseOut={() => setOmniMouseOver(false)}
+                        />
+                    )}
+                </section>
+
+                <section className={`right ${search_focus ? "search-focused" : ""}`}>
+                    {user.anonymous ? (
+                        <>
+                            <span className="spacer" />
+                            <i className="fa fa-adjust" onClick={toggleTheme} />
+                            <LanguagePicker />
+                            {show_sign_in && (
+                                <>
+                                    {show_sign_up_button && (
+                                        <Link
+                                            className="btn primary sign-up-btn"
+                                            to={"/register#" + location.pathname}
+                                        >
+                                            {_("Register")}
+                                        </Link>
+                                    )}
+                                    {show_log_in_link && (
+                                        <Link
+                                            className="sign-in"
+                                            to={"/sign-in#" + location.pathname}
+                                        >
+                                            {_("Sign In")}
+                                        </Link>
+                                    )}
+                                </>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <div className="spacer" />
+                            <IncidentReportIndicator />
+                            <ChatIndicator />
+                            <TournamentIndicator />
+                            <FriendIndicator />
+                            <NotificationIndicator onClick={toggleNotifications} />
+                            <GoTVIndicator />
+                            <TurnIndicator />
+
+                            <span className="icon-container mobile-only" onClick={toggleRightNav}>
+                                <PlayerIcon user={user} size={64} />
+                            </span>
+
+                            <Menu
+                                menuId="settings"
+                                title={
+                                    <span className="icon-container">
+                                        <PlayerIcon user={user} size={64} />
+                                        <span className="username">{user.username}</span>
+                                    </span>
+                                }
+                                to={`/user/view/${user.id}`}
+                                className="profile desktop-only"
+                                as="nav"
+                                aria-label={_("Profile")}
+                                openMenuLabel={_("Open profile and settings menu")}
+                            >
+                                <ProfileAndQuickSettingsBits settingsNavLink={settingsNavLink} />
+                            </Menu>
+                        </>
+                    )}
+                </section>
+
+                <div
+                    className={
+                        "nav-menu-modal-backdrop " +
+                        (notifications_active || right_nav_active ? "active" : "")
+                    }
+                    onClick={closeNavbar}
+                />
+
+                {notifications_active && <NotificationList />}
+
+                {/* Right Nav drop down on mobile */}
+                {right_nav_active && (
+                    <ul className="RightNav">
+                        <ProfileAndQuickSettingsBits settingsNavLink={settingsNavLink} />
+                    </ul>
+                )}
+            </header>
+        </MenuContext.Provider>
+    );
 }
 
+/** The unified admin interface, which is a separate site on an `admin.`
+ * hostname rather than a route here. Derived from wherever this page is
+ * being served so that production, beta and a development stack each reach
+ * their own, without a build-time constant to keep in step. */
+function adminInterfaceUrl(): string {
+    return `${window.location.protocol}//admin.${window.location.host}`;
+}
 
+interface MenuLinkProps {
+    title: string | React.ReactElement;
+    to?: string;
+    target?: string;
+    icon?: React.ReactNode;
+    external?: boolean;
+    onClick?: React.MouseEventHandler;
+    centered?: boolean;
+}
 
-declare var ogs_version;
-let omnisearch_sitemap = {};
+const MenuLink = forwardRef<HTMLElement, MenuLinkProps>(
+    ({ title, to, icon, target, external, onClick, centered }, ref): React.ReactElement => {
+        // Determine the appropriate element type
+        let Element: any;
+        const elementProps: any = {
+            className: clsx("MenuLink", { centered: centered }),
+            ref,
+        };
 
-omnisearch_sitemap[_("Home")] = [_("Home"), "/overview"];
-omnisearch_sitemap[_("Play")] = [_("Play"), "/play"];
-omnisearch_sitemap[_("Games")] = [_("Games"), "/observe-games"];
-omnisearch_sitemap[_("Players")] = [_("Players"), "/user/list"];
-omnisearch_sitemap[_("Tournaments")] = [_("Tournaments"), "/tournaments"];
-omnisearch_sitemap[_("Ladders")] = [_("Ladders"), "/ladders"];
-omnisearch_sitemap[_("Developers")] = [_("Developers & API Access"), "/developer"];
-omnisearch_sitemap[_("API Access")] = [_("Developers & API Access"), "/developer"];
-omnisearch_sitemap[_("API")] = [_("Developers & API Access"), "/developer"];
-omnisearch_sitemap[_("Mail")] = [_("Mail"), "/mail"];
-omnisearch_sitemap[_("Chat")] = [_("Chat & Lobby"), "/chat"];
-omnisearch_sitemap[_("Lobby")] = [_("Chat & Lobby"), "/chat"];
-omnisearch_sitemap[_("Settings")] = [_("Settings"), "/user/settings"];
-omnisearch_sitemap[_("Configuration")] = [_("Settings"), "/user/settings"];
-omnisearch_sitemap[_("Options")] = [_("Settings"), "/user/settings"];
-omnisearch_sitemap[_("Support OGS")] = [_("Support OGS"), "/user/supporter"];
-omnisearch_sitemap[_("Donate")] = [_("Donations"), "/user/supporter"];
-omnisearch_sitemap[_("Money")] = [_("Donations"), "/user/supporter"];
-omnisearch_sitemap[_("Contributing")] = [_("Contributing"), "/user/supporter"];
-omnisearch_sitemap[_("Price")] = [_("Donations"), "/user/supporter"];
-omnisearch_sitemap[_("Learn to play Go")] = [_("Learn to play Go"), "/learn-to-play-go"];
-omnisearch_sitemap[_("Learn")] = [_("Learn to play Go"), "/learn-to-play-go"];
-omnisearch_sitemap[_("Tutorial")] = [_("Learn to play Go"), "/learn-to-play-go"];
-omnisearch_sitemap[_("How to play go")] = [_("Learn to play Go"), "/learn-to-play-go"];
-omnisearch_sitemap[_("FAQ")] = [_("F.A.Q."), "https://forums.online-go.com/c/faq"];
-omnisearch_sitemap[_("F.A.Q.")] = [_("F.A.Q."), "https://forums.online-go.com/c/faq"];
-omnisearch_sitemap[_("Help")] = [_("F.A.Q."), "https://forums.online-go.com/c/faq"];
-omnisearch_sitemap[_("Changelog")] = [_("Changelog"), "docs/changelog"];
-omnisearch_sitemap[_("About")] = [_("About"), "/docs/about"];
-omnisearch_sitemap[_("Refund Policy")] = [_("Refund Policy"), "/docs/refund-policy"];
-omnisearch_sitemap[_("Terms of Service")] = [_("Terms of Service"), "/docs/terms-of-service"];
-omnisearch_sitemap[_("ToS")] = [_("Terms of Service"), "/docs/terms-of-service"];
-omnisearch_sitemap[_("Privacy Policy")] = [_("Privacy Policy"), "/docs/privacy-policy"];
-omnisearch_sitemap[_("Contact Information")] = [_("Contact Information"), "/docs/contact-information"];
-omnisearch_sitemap[_("Version")] = [_("Version") + " " + ogs_version];
-
-
-function match_sitemap(q) {
-    q = q.trim().toLowerCase();
-
-    let res = [];
-
-    for (let k in omnisearch_sitemap) {
-        if (q.length >= (Math.min(5, k.length)) && k.toLowerCase().indexOf(q) === 0) {
-            res.push(omnisearch_sitemap[k]);
+        if (!to) {
+            // Button (fakelink)
+            Element = "button";
+            elementProps.onClick = onClick;
+        } else if (external) {
+            // External link
+            Element = "a";
+            elementProps.href = to;
+            elementProps.target = target;
+        } else {
+            // Internal link
+            Element = Link;
+            elementProps.to = to;
+            elementProps.target = target;
         }
-    }
-    return res;
+
+        return (
+            <li>
+                <Element {...elementProps}>
+                    {icon && <span aria-hidden={true}>{icon}</span>}
+                    <span className="MenuLinkTitle">{title}</span>
+                </Element>
+            </li>
+        );
+    },
+);
+
+function ProfileAndQuickSettingsBits({
+    settingsNavLink,
+}: {
+    settingsNavLink: any;
+}): React.ReactElement {
+    const user = useUser();
+    const themeId = useId();
+
+    const [theme] = useData("theme", "system");
+
+    return (
+        <>
+            <MenuLink
+                title={_("Profile")}
+                to={`/user/view/${user.id}`}
+                icon={<PlayerIcon user={user} size={16} />}
+            />
+            <MenuLink
+                title={_("Settings")}
+                to="/user/settings"
+                icon={<i className="fa fa-gear"></i>}
+                ref={settingsNavLink}
+            />
+            <MenuLink
+                title={_("Sign out")}
+                onClick={logout}
+                icon={<i className="fa fa-power-off"></i>}
+            />
+            <li role="none" className="ThemeMenu">
+                <h4>
+                    <LineText>
+                        <span id={themeId}>{_("Theme")}</span>
+                    </LineText>
+                </h4>
+                <div role="group" aria-labelledby={themeId} className="theme-selectors-container">
+                    <h5 className="sr-only">{_("Website theme")}</h5>
+                    <div className="theme-selectors">
+                        <button
+                            title={pgettext("Light browser/app theme", "Light")}
+                            className={`theme-button ${theme === "light" ? "primary" : ""}`}
+                            onClick={setThemeLight}
+                            aria-label={pgettext(
+                                "Name of the browser/app theme with a light background",
+                                "Light theme",
+                            )}
+                        >
+                            <i className="fa fa-sun-o" />
+                        </button>
+                        <button
+                            title={pgettext("Dark browser/app theme", "Dark")}
+                            className={`theme-button ${theme === "dark" ? "primary" : ""}`}
+                            onClick={setThemeDark}
+                            aria-label={pgettext(
+                                "Name of the browser/app theme with a dark background",
+                                "Dark theme",
+                            )}
+                        >
+                            <i className="fa fa-moon-o" />
+                        </button>
+                        <button
+                            title={pgettext(
+                                "Browser/app theme designed for users with visual impairments",
+                                "Accessible",
+                            )}
+                            className={`theme-button ${theme === "accessible" ? "primary" : ""}`}
+                            onClick={setThemeAccessible}
+                            aria-label={pgettext(
+                                "Name of the browser/app theme designed for users with visual impairments",
+                                "Accessible theme",
+                            )}
+                        >
+                            <i className="fa fa-eye" />
+                        </button>
+                        <button
+                            title={pgettext("Automatic browser/app system theme", "System")}
+                            className={`theme-button ${theme === "system" ? "primary" : ""}`}
+                            onClick={setThemeSystem}
+                            aria-label={pgettext(
+                                "Name of the browser/app system theme automatically adapting the browser theme",
+                                "System theme",
+                            )}
+                        >
+                            <span className="composed-icon">
+                                <i className="fa fa-sun-o" />
+                                /
+                                <i className="fa fa-moon-o" />
+                            </span>
+                        </button>
+                    </div>
+                    <h5 className="sr-only">{_("Goban theme")}</h5>
+                    <div className="theme-selectors">
+                        <GobanThemePicker />
+                    </div>
+                </div>
+            </li>
+            <MenuLink
+                title={pgettext("Link to settings page with more theme options", "More options")}
+                centered={true}
+                to="/settings/theme"
+            />
+        </>
+    );
+}
+
+function BanIndicator(): React.ReactElement {
+    return (
+        <div className="BanIndicator">
+            <h3>{_("Your account has been suspended")}</h3>
+            <div>
+                <Link to="/appeal">
+                    {pgettext("Link for banned player to use to appeal their ban", "Appeal here")}
+                </Link>
+            </div>
+        </div>
+    );
 }

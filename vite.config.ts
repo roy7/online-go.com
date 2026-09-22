@@ -1,0 +1,981 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+import { createLogger, defineConfig } from "vite";
+import type { Plugin, ResolvedConfig, ViteDevServer, ProxyOptions } from "vite";
+import react from "@vitejs/plugin-react";
+//import circularDependency from "vite-plugin-circular-dependency";
+import path from "path";
+import { promises as fs, accessSync, readFileSync } from "fs";
+import type { IncomingMessage } from "http";
+import type { Plugin as PostcssPlugin } from "postcss";
+import http from "http";
+import checker from "vite-plugin-checker";
+import comment from "postcss-comment";
+import atImportGlob from "postcss-import-ext-glob";
+import atImport from "postcss-import";
+import mixins from "postcss-mixins";
+import nested from "postcss-nested";
+import simpleVars from "postcss-simple-vars";
+import functions from "postcss-functions";
+import postcssUrl from "postcss-url";
+import inline_svg from "postcss-inline-svg";
+import autoprefixer from "autoprefixer";
+import cssnano from "cssnano";
+import Color from "color";
+import { nodePolyfills } from "vite-plugin-node-polyfills";
+import cssSourcemap from "vite-plugin-css-sourcemap";
+import { execSync } from "child_process";
+import { createProxyWarningLogger } from "./scripts/vite-proxy-logger.ts";
+
+const _workerVersionMatch = readFileSync(
+    path.resolve(import.meta.dirname, "Makefile"),
+    "utf-8",
+).match(/^GOBAN_SOCKET_WORKER_VERSION=(.+)$/m);
+if (!_workerVersionMatch) {
+    throw new Error("GOBAN_SOCKET_WORKER_VERSION not found in Makefile");
+}
+const GOBAN_SOCKET_WORKER_VERSION = _workerVersionMatch[1].trim();
+const OGS_I18N_BUILD_MODE = (process.env.OGS_I18N_BUILD_MODE || "false").toLowerCase() === "true";
+let OGS_BACKEND = process.env.OGS_BACKEND;
+OGS_BACKEND = OGS_BACKEND ? OGS_BACKEND.toUpperCase() : "BETA";
+
+// Get version information for chunk naming
+function getVersionInfo(): string {
+    try {
+        // Try to get git version (format: 5.1-8740-g70dbb6a6)
+        const gitVersion = execSync("git describe --long", { encoding: "utf-8" }).trim();
+        return gitVersion;
+    } catch {
+        console.warn("Could not get git version, using timestamp");
+        return Date.now().toString();
+    }
+}
+
+/*
+ * Emits a plain viewport unit fallback ahead of any declaration using a
+ * dynamic one, so `height: 100dvh` is preceded by `height: 100vh`.
+ *
+ * This replaces the postcss-viewport-unit-fallback package (MIT,
+ * https://github.com/gooodev/postcss-viewport-unit-fallback), which only ever
+ * had a single release and inserts its fallback with `decl.before(string)`.
+ * postcss parses that string without a `from` option, so the declaration it
+ * creates carries no source file, and Vite warns that imported assets may be
+ * transformed incorrectly. Cloning the original declaration keeps its source
+ * information intact.
+ *
+ * The pattern matches only a single character after the l/s/d, which is what
+ * lets units like dvmin and dvmax fall back to vmin/vmax as well as dvh/dvw.
+ */
+function viewportUnitFallback(): PostcssPlugin {
+    const viewport_unit_re = /(\d)[l|s|d]([vh|vw])/g;
+
+    return {
+        postcssPlugin: "postcss-viewport-unit-fallback",
+        OnceExit: (root) => {
+            root.walkDecls((decl) => {
+                if (typeof decl.value === "string" && decl.value.match(viewport_unit_re)) {
+                    decl.cloneBefore({
+                        value: decl.value.replace(viewport_unit_re, "$1$2"),
+                    });
+                }
+            });
+        },
+    };
+}
+
+const SUPPORTED_BACKENDS = ["BETA", "PRODUCTION", "LOCAL"] as const;
+if (process.env.OGS_BACKEND && !SUPPORTED_BACKENDS.includes(OGS_BACKEND as any)) {
+    throw new Error(
+        `Unsupported OGS_BACKEND value: ${OGS_BACKEND}. Must be one of: ${SUPPORTED_BACKENDS.join(
+            ", ",
+        )}`,
+    );
+}
+
+const backend_url =
+    OGS_BACKEND === "BETA"
+        ? "https://beta.online-go.com"
+        : OGS_BACKEND === "PRODUCTION"
+          ? "https://online-go.com"
+          : process.env.OGS_CONTAINER
+            ? "http://loadbalancer"
+            : "http://127.0.0.1:1080";
+
+const PORT = process.env.OGS_PORT ? parseInt(process.env.OGS_PORT) : 8080;
+
+// Django trusts this origin for requests forwarded by the local dev server.
+const local_dev_headers = {
+    origin: "http://localhost:8080",
+    referer: "http://localhost:8080/",
+};
+
+const proxy: Record<string, ProxyOptions> = {};
+
+// REST api proxies
+for (const base_path of [
+    "/api",
+    "/api-docs",
+    "/termination-api",
+    "/merchant",
+    "/billing",
+    "/sso",
+    "/oauth2",
+    "/complete",
+    "/disconnect",
+    "/OGSScoreEstimator",
+    "/oje",
+    "/firewall",
+    "/fair_play",
+    "/__debug__",
+    "/static",
+]) {
+    proxy[base_path] = {
+        target: backend_url,
+        changeOrigin: true,
+        headers: OGS_BACKEND === "LOCAL" ? local_dev_headers : undefined,
+        rewrite: (path: string) => {
+            return backend_url + path;
+        },
+    };
+}
+
+// termination-server websocket proxy
+proxy["^/$"] = {
+    target: backend_url + "/",
+    changeOrigin: true,
+    ws: true,
+    rewriteWsOrigin: true,
+    rewrite: (path: string) => {
+        //console.info("termination-server websocket -> ", backend_url + "/");
+        return backend_url + path;
+    },
+    bypass: (req, res, _options) => {
+        if (res) {
+            // res is undefined for websockets, which is the only thing we want
+            // to proxy. For other requests, namely serving index.html, we want
+            // vite to handle it, so returning the url here does that.
+            return req.url;
+        }
+        return undefined;
+    },
+};
+
+export default defineConfig({
+    root: "src",
+    // Use relative paths so assets resolve correctly when loaded from CDN
+    // Without this, Vite generates absolute paths (/) that resolve to document origin
+    // instead of the CDN where the scripts are actually loaded from
+    base: "./",
+
+    build: !OGS_I18N_BUILD_MODE
+        ? {
+              // This is our production build
+              outDir: "../dist",
+              sourcemap: true,
+              minify: "oxc",
+              target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
+              chunkSizeWarningLimit: 1024 * 1024 * 1.5,
+              rollupOptions: {
+                  input: {
+                      ogs: path.resolve(import.meta.dirname, "src/main.tsx"),
+                  },
+                  output: {
+                      assetFileNames: (assetInfo) => {
+                          const version = getVersionInfo();
+                          const name = assetInfo.names?.[0]?.replace(/\.[^.]+$/, "") || "";
+
+                          // Main CSS bundle: use .min.css for backwards compatibility with Makefile
+                          if (name === "ogs") {
+                              return `[name].min.[ext]`;
+                          }
+                          // Monaco-vim CSS stays at root (expected by Makefile)
+                          if (name === "monaco-vim") {
+                              return `[name].[ext]`;
+                          }
+                          // Code-split CSS goes to modules/ with version+hash
+                          if (assetInfo.names?.[0]?.endsWith(".css")) {
+                              return `modules/[name]-${version}-[hash].[ext]`;
+                          }
+                          // Other assets
+                          return `[name].[ext]`;
+                      },
+                      entryFileNames: "[name].js",
+                      chunkFileNames: (_chunkInfo) => {
+                          // All chunks (including dynamically imported ones) go to modules/
+                          // Include version info to ensure cache busting
+                          const version = getVersionInfo();
+                          return `modules/[name]-${version}-[hash].js`;
+                      },
+                      // No manual chunking - React.lazy() handles dynamic imports naturally
+                      manualChunks: undefined,
+                  },
+              },
+          }
+        : {
+              // This build section is for our i18n system which run xgettext
+              // on the non-minified bundle
+              outDir: "../i18n/build/",
+              sourcemap: true,
+              minify: false,
+              target: "es2020",
+              chunkSizeWarningLimit: 1024 * 1024 * 99,
+              rollupOptions: {
+                  input: {
+                      ogs: path.resolve(import.meta.dirname, "src/main.tsx"),
+                  },
+                  /*
+                   * These bundles are only ever read as text by xgettext, never
+                   * executed, so Rolldown rewriting `import.meta` to `{}` for the
+                   * CommonJS output below costs us nothing. CommonJS is what
+                   * xgettext-js needs: its parser defaults to a script source
+                   * type and cannot parse ESM syntax.
+                   */
+                  onwarn: (warning, defaultHandler) => {
+                      if (warning.code === "EMPTY_IMPORT_META") {
+                          return;
+                      }
+                      defaultHandler(warning);
+                  },
+                  output: {
+                      format: "commonjs",
+                      assetFileNames: "[name].strings.[ext]",
+                      entryFileNames: "[name].strings.js",
+                      chunkFileNames: "[name].strings.js",
+                      /*
+                       * Keep third-party code out of ogs.strings.js and bundle
+                       * everything of ours (including LearningHub and the other
+                       * lazy-loaded modules) into it, so the extraction scripts
+                       * see all our strings and none of theirs.
+                       *
+                       * This has to be advancedChunks rather than manualChunks:
+                       * under Rolldown, manualChunks still names the chunks but
+                       * its grouping is subject to size heuristics, which left
+                       * ~977 node_modules modules in ogs.strings.js. @nivo
+                       * declares its own top-level `_`, so our gettext `_` from
+                       * lib/translate.ts got renamed to `_$6` to deconflict and
+                       * xgettext silently stopped recognising it. The explicit
+                       * zero thresholds below disable that merging.
+                       */
+                      codeSplitting: {
+                          minSize: 0,
+                          minShareCount: 1,
+                          groups: [
+                              { name: "goban", test: /\/goban\//, minSize: 0, minShareCount: 1 },
+                              {
+                                  name: "rdh",
+                                  test: /react-dynamic-help/,
+                                  minSize: 0,
+                                  minShareCount: 1,
+                              },
+                              {
+                                  name: "vendor",
+                                  test: /node_modules/,
+                                  minSize: 0,
+                                  minShareCount: 1,
+                              },
+                              /*
+                               * Catch-all, matched last: keeps LearningHub and the
+                               * other lazy-loaded modules in ogs.strings.js instead
+                               * of splitting them into chunks the extraction
+                               * scripts never read.
+                               */
+                              { name: "ogs", test: /.*/, minSize: 0, minShareCount: 1 },
+                          ],
+                      },
+                  },
+              },
+          },
+    worker: {
+        rollupOptions: {
+            output: {
+                // Stable filename (no hash) so the termination server can serve
+                // it at a known path.  Cache-busting comes from the version number.
+                entryFileNames: "modules/[name].js",
+            },
+        },
+    },
+    css: {
+        postcss: {
+            parser: comment,
+            plugins: [
+                atImportGlob(),
+                atImport(),
+                mixins(),
+                nested(),
+                simpleVars(),
+                functions({
+                    functions: {
+                        lighten: (color: string, amount: string) => {
+                            try {
+                                return Color(color)
+                                    .lighten(parseFloat(amount) / 100)
+                                    .hex();
+                            } catch {
+                                return color;
+                            }
+                        },
+                        darken: (color: string, amount: string) => {
+                            try {
+                                return Color(color)
+                                    .darken(parseFloat(amount) / 100)
+                                    .hex();
+                            } catch {
+                                return color;
+                            }
+                        },
+                        desaturate: (color: string, amount: string) => {
+                            try {
+                                return Color(color)
+                                    .desaturate(parseFloat(amount) / 100)
+                                    .hex();
+                            } catch {
+                                return color;
+                            }
+                        },
+                        saturate: (color: string, amount: string) => {
+                            try {
+                                return Color(color)
+                                    .saturate(parseFloat(amount) / 100)
+                                    .hex();
+                            } catch {
+                                return color;
+                            }
+                        },
+                    },
+                }),
+                postcssUrl({ url: "inline" }),
+                inline_svg({
+                    paths: [
+                        path.resolve(import.meta.dirname, "assets"),
+                        path.resolve(import.meta.dirname, "src"),
+                    ],
+                }),
+                viewportUnitFallback(),
+                autoprefixer() as any,
+                // Only minify CSS in production
+                ...(process.env.NODE_ENV === "production" ? [cssnano()] : []),
+            ],
+        },
+        preprocessorMaxWorkers: true,
+        devSourcemap: true,
+    },
+    define: {
+        "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV),
+        GOBAN_SOCKET_WORKER_VERSION: JSON.stringify(GOBAN_SOCKET_WORKER_VERSION),
+
+        /* This is for goban to let it know we are building for a front end, as opposed to server usage */
+        CLIENT: true,
+    },
+    plugins: [
+        proxyWarningLoggerPlugin(),
+        {
+            name: "moderator-ui-resolver",
+            resolveId(id: string) {
+                if (id.startsWith("@moderator-ui/")) {
+                    const moduleName = id.replace("@moderator-ui/", "");
+                    const submodulePath = path.resolve(
+                        import.meta.dirname,
+                        `submodules/moderator-ui/${moduleName}/index.ts`,
+                    );
+                    const stubPath = path.resolve(
+                        import.meta.dirname,
+                        `src/stubs/moderator-ui/${moduleName}/index.ts`,
+                    );
+
+                    // Check if submodule exists first
+                    try {
+                        accessSync(submodulePath);
+                        return submodulePath;
+                    } catch {
+                        // Try stub
+                        try {
+                            accessSync(stubPath);
+                            return stubPath;
+                        } catch {
+                            return null;
+                        }
+                    }
+                }
+                return null;
+            },
+        },
+        admin_host_proxy(),
+        ogs_vite_middleware(),
+        react(),
+        //circularDependency(),
+        {
+            name: "welcome-message",
+            configureServer(server) {
+                const originalPrintUrls = server.printUrls;
+                server.printUrls = function (...args) {
+                    originalPrintUrls.call(this, ...args);
+                    console.log("\n⚫ ⚪ Online-Go.com development server running!");
+                    console.log("\n Talking to ", OGS_BACKEND, " backend at ", backend_url, "\n");
+                    console.log(
+                        "\n⚫ ⚪ Chat with us in Slack at:\n\n   https://join.slack.com/t/online-go/shared_invite/zt-2jww58l2v-iwhhBiVsXNxcD9xm74bIKA\n",
+                    );
+                    console.log(
+                        "  ▶️  TypeScript type checking and ESLint are running in the background...\n",
+                    );
+                };
+            },
+        },
+        // This plugin's inject step filters on file contents rather than file
+        // type, so the bare word "global" in ogs.css (which imports
+        // ./global_styl/*) makes it hand the stylesheet to the JS parser, which
+        // then warns that it cannot parse it. Browsers provide globalThis, and
+        // production builds ship without these polyfills entirely, so the
+        // `global` shim is not needed here. Buffer and process remain polyfilled.
+        process.env.NODE_ENV !== "production"
+            ? nodePolyfills({ globals: { global: false } })
+            : null,
+        // Enable CSS sourcemaps in production builds
+        cssSourcemap(),
+        // checker relative directory is src/
+        //
+        !OGS_I18N_BUILD_MODE
+            ? checker({
+                  typescript: {
+                      tsconfigPath:
+                          process.env.NODE_ENV === "production"
+                              ? "tsconfig.json"
+                              : "../tsconfig.json",
+                  },
+                  eslint: {
+                      useFlatConfig: true,
+                      lintCommand: `eslint ${path.resolve(import.meta.dirname, "src")}`,
+                  },
+                  overlay: {
+                      initialIsOpen: true,
+                  },
+                  enableBuild: true,
+              })
+            : null,
+    ],
+    resolve: {
+        alias: Object.assign(
+            {
+                "@stubs/*": path.resolve(import.meta.dirname, "src/stubs/*"),
+                "@moderator-ui/*": path.resolve(import.meta.dirname, "src/stubs/moderator-ui/*"),
+                "@": path.resolve(import.meta.dirname, "src"),
+                goban: path.resolve(import.meta.dirname, "submodules/goban/src"),
+                goscorer: path.resolve(
+                    import.meta.dirname,
+                    "submodules/goban/src/third_party/goscorer/goscorer",
+                ),
+                "react-dynamic-help": path.resolve(
+                    import.meta.dirname,
+                    "submodules/react-dynamic-help/src",
+                ),
+            },
+            process.env.NODE_ENV !== "production"
+                ? {
+                      "source-map-js": "source-map",
+                  }
+                : ({} as any),
+        ),
+    },
+    optimizeDeps: {
+        // Pre-bundle heavy dependencies for better dev server performance
+        include: [
+            "react",
+            "react-dom",
+            "react-router-dom",
+            "@nivo/line",
+            "@nivo/pie",
+            "d3",
+            "moment",
+            "sweetalert2",
+        ],
+    },
+
+    server: {
+        port: PORT,
+        host: true,
+        proxy,
+        allowedHosts: true,
+        hmr: {
+            path: "/__vite_hmr",
+            overlay: true,
+        },
+    },
+});
+
+function proxyWarningLoggerPlugin(): Plugin {
+    let flush = () => {};
+    return {
+        name: "proxy-warning-logger",
+        config(config) {
+            const logger = createProxyWarningLogger(
+                config.customLogger ??
+                    createLogger(config.logLevel, { allowClearScreen: config.clearScreen }),
+            );
+            flush = logger.flushProxyWarnings;
+            // Keep the live logger state getter through Vite's config hook.
+            config.customLogger = logger;
+        },
+        configureServer(server) {
+            server.httpServer?.once("close", () => flush());
+        },
+        configurePreviewServer(server) {
+            server.httpServer.once("close", () => flush());
+        },
+    };
+}
+
+/**
+ * Hands requests for an `admin.*` hostname to the local OGS stack.
+ *
+ * On a development instance every public hostname lands on this dev server,
+ * but the unified admin interface (ogs/apps/admin) is served by the stack's
+ * termination-server for `admin.*` hosts, not by this client. So a request
+ * whose Host starts with `admin.` is relayed to the local load balancer,
+ * Host intact (the stack routes by it), and never reaches Vite. Only
+ * meaningful against the local stack; against beta or production the admin
+ * host is its own site.
+ *
+ * `Origin` and `Referer` use the origin Django trusts for local development.
+ */
+function admin_host_proxy(): Plugin {
+    const target = new URL(backend_url);
+    return {
+        name: "admin-host-proxy",
+        configureServer(server: ViteDevServer) {
+            server.middlewares.use((req, res, next) => {
+                if (!/^admin[.-]/i.test(req.headers.host ?? "")) {
+                    next();
+                    return;
+                }
+                // Say so rather than fall through. Falling through served
+                // this site's own index for an admin hostname, with a 200
+                // and no error anywhere: it looked like the admin interface
+                // was broken when the relay simply was not installed. The
+                // admin interface is only ever relayed to a local stack —
+                // it pauses live games and changes who is staff, and doing
+                // that against beta or production from a dev server is not
+                // something to reach by forgetting a variable.
+                if (OGS_BACKEND !== "LOCAL") {
+                    res.writeHead(503, { "content-type": "text/plain" });
+                    res.end(
+                        `This dev server is talking to ${OGS_BACKEND}, so it will not relay ` +
+                            `${req.headers.host}.\n\n` +
+                            `The admin interface is relayed to the local stack only. Restart ` +
+                            `with OGS_BACKEND=LOCAL, or open the stack's own admin host ` +
+                            `directly (admin.localhost:1080).\n`,
+                    );
+                    return;
+                }
+                const upstream = http.request(
+                    {
+                        host: target.hostname,
+                        port: target.port || 80,
+                        method: req.method,
+                        path: req.url,
+                        headers: {
+                            ...req.headers,
+                            ...local_dev_headers,
+                        },
+                    },
+                    (answer) => {
+                        res.writeHead(answer.statusCode ?? 502, answer.headers);
+                        answer.pipe(res);
+                    },
+                );
+                upstream.on("error", (err) => {
+                    if (!res.headersSent) {
+                        res.writeHead(502, { "content-type": "text/plain" });
+                    }
+                    res.end(`admin host proxy: ${err.message}`);
+                });
+                req.pipe(upstream);
+            });
+        },
+    };
+}
+
+/*
+ * For historical reasons, OGS uses a custom index.html template system
+ */
+function ogs_vite_middleware(): Plugin {
+    let config: ResolvedConfig;
+    //let command: "build" | "serve" = "build";
+    return {
+        name: "ogs-process-index-template",
+        /*
+        config(_config, env) {
+            command = env.command;
+        },
+        */
+        configResolved(resolvedConfig) {
+            config = resolvedConfig;
+        },
+
+        /**
+         * for dev
+         * if SPA, just use template and write script main.{js,ts} for /{entry}.html
+         * if MPA, check pageName(default is index) and write /${pagesDir}/{pageName}/${entry}.html
+         */
+        configureServer(server: ViteDevServer) {
+            /* The index template's deferred stylesheet link points at the
+             * built ogs.css, which only exists in production; in dev the same
+             * styles are injected by Vite through the main.tsx module import.
+             * This must run as a pre middleware: the post middlewares below
+             * run after Vite's transform middleware, which would otherwise
+             * compile the linked URL into a second, stale copy of every rule
+             * that wins the cascade and masks HMR updates. Stylesheet
+             * requests carry Accept: text/css; the module import fetches with
+             * Accept: star-slash-star, so it still gets the real styles. */
+            server.middlewares.use((req, res, next) => {
+                const url = (req.originalUrl || "").split("?")[0];
+                if (url.endsWith("ogs.css") && (req.headers.accept || "").includes("text/css")) {
+                    res.setHeader("Content-Type", "text/css; charset=utf-8");
+                    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+                    res.end("");
+                    return;
+                }
+                next();
+            });
+            return () => {
+                /* Serve /img/* from the repo's asset directories so board/stone textures
+                 * referenced via the CDN-rewritten base URL resolve against local disk in dev.
+                 * Roots are searched in order; the anime_*.svg assets live in the goban
+                 * submodule only, so we need it as a fallback.
+                 * In production, the contents of these directories are mirrored onto the CDN.
+                 *
+                 * /img/ is treated as a dev-only mount: a miss returns 404 instead of
+                 * falling through to the SPA catch-all (which would 200 + index.html and
+                 * hide the problem). This is safe because /img/ is never used for SPA
+                 * routes; it is reserved for CDN-mirrored repo assets. */
+                const assetRoots = [
+                    path.resolve(import.meta.dirname, "assets/img"),
+                    path.resolve(import.meta.dirname, "submodules/goban/assets/img"),
+                ];
+                const mimeByExt: Record<string, string> = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".svg": "image/svg+xml",
+                    ".webp": "image/webp",
+                    ".gif": "image/gif",
+                };
+                server.middlewares.use(async (req, res, next) => {
+                    const url = req.originalUrl || "";
+                    const match = url.match(/^\/+img\/([^?#]+)/);
+                    if (!match) {
+                        return next();
+                    }
+                    const send404 = (msg: string) => {
+                        res.statusCode = 404;
+                        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+                        res.setHeader("Cache-Control", "no-cache");
+                        res.end(msg);
+                    };
+                    const rel = match[1];
+                    for (const root of assetRoots) {
+                        const file = path.resolve(root, rel);
+                        if (file !== root && !file.startsWith(root + path.sep)) {
+                            continue;
+                        }
+                        try {
+                            const body = await fs.readFile(file);
+                            const ext = path.extname(file).toLowerCase();
+                            res.setHeader(
+                                "Content-Type",
+                                mimeByExt[ext] || "application/octet-stream",
+                            );
+                            res.setHeader("Cache-Control", "no-cache");
+                            res.end(body);
+                            return;
+                        } catch (err) {
+                            const code = (err as NodeJS.ErrnoException).code;
+                            if (code === "ENOENT" || code === "EISDIR") {
+                                continue;
+                            }
+                            return next(err);
+                        }
+                    }
+                    send404(
+                        `Not Found: /img/${rel}\n` +
+                            `Looked in:\n` +
+                            assetRoots.map((r) => `  ${r}\n`).join("") +
+                            `Add the file to one of those directories or check the filename.\n`,
+                    );
+                });
+
+                /* Handle our custom index template, serve it for anything that doesn't look like a file */
+                server.middlewares.use(async (req, res, next) => {
+                    const url = req.originalUrl || "";
+                    // if not html, next it.
+                    const should_serve_index =
+                        url.endsWith(".html") || url === "/" || /^.*\/[^.]*$/.test(url);
+                    if (!should_serve_index) {
+                        return next();
+                    }
+
+                    let content = await fs.readFile(
+                        path.resolve(config.root, "index.html"),
+                        "utf-8",
+                    );
+
+                    content = await ogs_process_template(content, req);
+
+                    // using vite's transform html function to add basic html support
+                    //content = await server.transformIndexHtml?.(req.url, content, req.originalUrl);
+                    content = await server.transformIndexHtml?.(url, content, req.originalUrl);
+
+                    res.end(content);
+                });
+
+                /* Handle some non vite static files */
+                server.middlewares.use(async (req, res, next) => {
+                    const url = req.originalUrl;
+
+                    function send_response(
+                        body: string,
+                        content_type: string = "application/javascript",
+                    ) {
+                        res.setHeader("Content-Type", `${content_type}; charset=utf-8`);
+                        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+                        res.setHeader("Pragma", "no-cache");
+                        res.setHeader("Expires", "0");
+                        res.setHeader("Content-Length", Buffer.byteLength(body));
+                        res.statusCode = 200;
+                        res.end(body);
+                        return;
+                    }
+
+                    if (url === "/manifest.json") {
+                        const manifest = {
+                            short_name: "OGS",
+                            name: "Online-Go.com",
+                            icons: [
+                                {
+                                    src: "https://cdn.online-go.com/icons/android-chrome-192x192.png",
+                                    type: "image/png",
+                                    sizes: "192x192",
+                                },
+                            ],
+                            start_url: "/",
+                            display: "standalone",
+                            scope: "/",
+                            background_color: "#eeeeee",
+                            theme_color: "#000000",
+                        };
+                        send_response(JSON.stringify(manifest), "application/json");
+                        return;
+                    }
+                    if (url?.endsWith("vendor.js")) {
+                        console.info(`GET ${url} -> node_modules/vendor.js`);
+                        send_response("");
+                        return;
+                    }
+
+                    if (url?.startsWith("/locale")) {
+                        /*
+                        console.info(
+                            `GET ${url} -> http://storage.googleapis.com/ogs-site-files/dev${url}`,
+                        );
+                        */
+
+                        // if build file exists in i18n/build/locale, serve that instead
+                        const build_file = path.resolve(config.root, "../i18n/" + url);
+                        //console.log("build_file", build_file);
+                        if (await fs.stat(build_file).catch(() => false)) {
+                            send_response(await fs.readFile(build_file, "utf-8"));
+                            return;
+                        }
+
+                        const options = {
+                            hostname: "storage.googleapis.com",
+                            port: 80,
+                            path: "/ogs-site-files/dev" + url,
+                            method: "GET",
+                        };
+
+                        const outgoing_request = http.request(options, (outgoing_response) => {
+                            outgoing_response.setEncoding("utf8");
+                            let data = "";
+                            outgoing_response.on("data", (chunk) => {
+                                data += chunk.toString();
+                            });
+                            outgoing_response.on("end", () => {
+                                send_response(data);
+                            });
+                        });
+
+                        outgoing_request.on("error", (e) => {
+                            res.statusCode = 500;
+                            res.end(e.message);
+                        });
+
+                        outgoing_request.end();
+                        return;
+                    }
+
+                    return next();
+                });
+            };
+        },
+    };
+}
+
+async function ogs_process_template(content: string, req: IncomingMessage): Promise<string> {
+    const url = new URL(req.url || "", `http://${req.headers.host}`);
+    const port = url.port;
+
+    const supported_languages = JSON.parse(
+        await fs.readFile("i18n/languages.json", { encoding: "utf-8" }),
+    );
+
+    const replaced = content.replace(/[{][{]\s*(\w+)\s*[}][}]/g, (_, parameter) => {
+        switch (parameter) {
+            case "CDN_SERVICE": {
+                // We run within a docker container on 8080 but are served out of 443 so no
+                // need to specify a port, just use the same hostname.
+                if (url.hostname?.indexOf("uffizzi") >= 0) {
+                    return `//${url.hostname}/`;
+                }
+                return `//${url.hostname}:${port}/`;
+            }
+            case "LIVE_RELOAD": {
+                if (url.hostname?.indexOf("uffizzi") >= 0) {
+                    // no need for live reloading on uffizzi
+                    return ``;
+                }
+                //return `<script async src="//${url.hostname}:35701/livereload.js"></script>`;
+                return ``;
+            }
+            case "MIN":
+                return "";
+
+            case "PAGE_TITLE":
+                return "Play Go at online-go.com!";
+            case "PAGE_DESCRIPTION":
+                return "Online-Go.com is the best place to play the game of Go online. Our community supported site is friendly, easy to use, and free, so come join us and play some Go!";
+            case "PAGE_KEYWORDS":
+                return "Go, Baduk, Weiqi, OGS, Online-Go.com";
+            case "PAGE_LANGUAGE":
+                return getPreferredLanguage(req, supported_languages);
+
+            case "OG_TITLE":
+                return "";
+            case "OG_URL":
+                return "";
+            case "OG_IMAGE":
+                return "";
+            case "OG_DESCRIPTION":
+                return "";
+            case "SUPPORTED_LANGUAGES":
+                return JSON.stringify(supported_languages);
+
+            case "AMEX_CLIENT_ID":
+                /* cspell: disable-next-line */
+                return "kvEB9qXE6jpNUv3fPkdbWcPaZ7nQAXyg";
+            case "AMEX_ENV":
+                return "qa";
+
+            case "RELEASE":
+                return "";
+            case "VERSION":
+                return "";
+            case "LANGUAGE_VERSION":
+                return "";
+            case "VENDOR_HASH_DOTJS":
+                return "js";
+            case "VERSION_DOTJS":
+                //return "js";
+                return "";
+            case "OGS_VERSION_HASH_DOTJS":
+                return "js";
+            case "VERSION_DOTCSS":
+                return "css";
+            case "LANGUAGE_VERSION_DOTJS":
+                return "js";
+            case "GOBAN_JS": {
+                // Since we're using Vite's module resolution in dev mode,
+                // we don't need to serve a separate goban.js file
+                return "";
+            }
+            case "EXTRA_CONFIG": {
+                const ip = req.socket.remoteAddress;
+                const location = undefined;
+                //return `<script>window['websocket_host'] = "${server_url}";</script>`;
+
+                /* OGS_DEV_BACKEND tells the client which backend the dev
+                 * server was started with. It cannot be a compile-time
+                 * `define` constant: in dev, rolldown-vite does not replace
+                 * bare identifiers, and vite-plugin-node-polyfills turns
+                 * `process` into an imported shim binding with an empty `env`,
+                 * so `process.env.*` defines are not replaced either. Deployed
+                 * builds never set it, and select servers by hostname. */
+                return `<script>
+                    window.ip_location = ${JSON.stringify(location)};
+                    window.ip_address = "${ip}";
+                    window.OGS_DEV_BACKEND = ${JSON.stringify(OGS_BACKEND)};
+                </script>`;
+            }
+        }
+        return "{{" + parameter + "}}";
+    });
+    return replaced;
+}
+
+/* Detect preferred language  */
+function isSupportedLanguage(lang: string, supported_languages: any) {
+    if (!lang) {
+        return null;
+    }
+
+    lang = lang.toLowerCase();
+
+    if (lang in supported_languages) {
+        return lang;
+    }
+
+    lang = lang.replace(/-[a-z]+/, "");
+
+    if (lang in supported_languages) {
+        return lang;
+    }
+
+    return null;
+}
+
+function getPreferredLanguage(req: IncomingMessage, supported_languages: any) {
+    let languages = ["en"];
+    try {
+        languages = (req.headers?.["accept-language"] || "")
+            .split(",")
+            .map((s) => s.replace(/;q=.*/, "").trim().toLowerCase());
+    } catch (e) {
+        console.trace(e);
+    }
+
+    try {
+        for (let i = 0; i < languages.length; ++i) {
+            const lang = isSupportedLanguage(languages[i], supported_languages);
+            if (lang) {
+                return lang;
+            }
+        }
+    } catch (e) {
+        console.trace(e);
+    }
+
+    return "en";
+}

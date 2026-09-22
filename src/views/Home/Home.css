@@ -1,0 +1,265 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+#Home-Container {
+    .welcome {
+        margin-top: 2rem;
+        text-align: center;
+        font-size: x-large;
+    }
+}
+
+#Home {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+
+    h3 > i {
+        margin-right: 1rem;
+    }
+
+    .actions {
+        display: flex;
+        justify-content: center;
+    }
+
+    .actions-container {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        flex-basis: 5rem;
+        max-height: 100dvh;
+        max-height: calc(100dvh - var(--navbar-height));
+    }
+
+    .active-games {
+        flex-grow: 1;
+        flex-basis: 20rem;
+        //width: 100%;
+        margin-top: 1rem;
+        margin-left: auto;
+        margin-right: auto;
+        max-width: 100%;
+        height: 100%;
+
+        .active-games-header {
+            display: flex;
+            align-items: center;
+            justify-content: left;
+            font-size: 0.9rem;
+        }
+    }
+
+    .no-active-games {
+        margin-top: 1rem;
+        color: var(--shade2);
+        font-size: 0.9rem;
+    }
+
+    .learn-how-to-play {
+        flex-grow: 0;
+    }
+
+    .left {
+        flex: 1;
+        min-width: 0;
+        max-width: 100dvw;
+        display: flex;
+        flex-direction: column;
+        overflow-x: hidden;
+    }
+
+    .right {
+        flex: 0;
+        flex-basis: 20rem;
+        min-width: 20rem;
+        max-width: 100dvw;
+        text-align: left;
+        margin-left: 1rem;
+
+        &:not(:has(.ProfileCard, .home-categories > *)) {
+            display: none;
+        }
+
+        a {
+            display: block;
+
+            img {
+                height: 15px;
+                width: 15px;
+            }
+        }
+    }
+
+    .home-categories {
+        padding-top: 1rem;
+
+        a > i {
+            margin-right: 0.5rem;
+        }
+
+        > div:not(.ActiveAnnouncements-container) {
+            margin-left: 2rem;
+        }
+
+        > .ActiveAnnouncements-container .Card {
+            margin-left: 0;
+        }
+    }
+
+    .ProfileCard {
+        margin-top: 2rem;
+    }
+
+    .rank-and-progress {
+        display: inline-flex;
+        align-items: center;
+
+        .progress {
+            flex: 1;
+        }
+    }
+
+    span.UserRating {
+        span.frac {
+            font-size: 100%;
+            color: var(--shade2);
+        }
+
+        sup {
+            padding-left: 0.2em;
+        }
+    }
+
+    .progress-bar {
+        span.UserRating {
+            span.frac {
+                color: #eee;
+            }
+
+            sup {
+                color: #eee;
+            }
+        }
+    }
+
+    .ladder-rank {
+        display: inline-block;
+        width: 3rem;
+        text-align: left;
+        margin-right: 1rem;
+    }
+
+    .FriendList {
+        min-height: 5rem;
+        max-height: 20rem;
+        overflow-y: auto;
+    }
+
+    .Home-TournamentList,
+    .Home-LadderList,
+    .Home-GroupList {
+        a,
+        .clickable,
+        .fakelink {
+            color: var(--text-color);
+        }
+
+        a:active,
+        a:hover,
+        .clickable:hover,
+        .fakelink:hover {
+            color: var(--text-color-active);
+        }
+    }
+
+    .invite {
+        display: flex;
+
+        .fa {
+            margin-right: 0.5rem;
+            cursor: pointer;
+        }
+
+        .fa-check {
+            color: var(--success);
+        }
+
+        .fa-times {
+            color: var(--reject);
+        }
+    }
+
+    .translation-dialog {
+        text-align: justify;
+
+        .fab.reject {
+            float: right;
+        }
+
+        .never-show-this-message-button {
+            margin-top: 2rem;
+        }
+    }
+
+    .moderation-offer {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding-top: 1rem;
+    }
+
+    .play-buttons-column {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        padding-top: 2rem;
+        padding-left: 0rem;
+        padding-right: 1rem;
+    }
+
+    @media screen and (max-width: 850px) {
+        .play-buttons-column {
+            order: 2;
+            width: 100%;
+            padding-left: 1rem;
+            padding-right: 1rem;
+            padding-top: 1rem;
+        }
+
+        .left {
+            order: 1;
+            flex-basis: 100%;
+        }
+
+        .right {
+            order: 3;
+            flex-basis: 100%;
+            min-width: 0;
+            margin-left: 0;
+        }
+    }
+
+    .top-bar-container {
+        width: 100%;
+        max-width: 60rem;
+        margin-left: auto;
+        margin-right: auto;
+    }
+}

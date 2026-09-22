@@ -1,1 +1,73 @@
-/// <reference path="jquery.flot.d.ts" />
+/// <reference path="js-noise.d.ts" />
+/// <reference types="vite/client" />
+
+// Vite worker URL import: `import url from './worker?worker&url'` returns
+// the URL string of the separately-bundled worker script.
+declare module "*?worker&url" {
+    const src: string;
+    export default src;
+}
+
+// Compile-time constant injected by Vite from goban-socket-worker-version file
+declare const GOBAN_SOCKET_WORKER_VERSION: string;
+
+interface Window {
+    global_goban?: import("goban").GobanRenderer | null;
+    // TODO: dedupe with global_goban
+    goban?: import("goban").GobanRenderer | null;
+
+    // Set in index.html
+    cdn_service: string;
+    ogs_release: string;
+    ogs_current_language: string;
+    ip_location: undefined | { continent: string; country: string; valid: boolean };
+    ip_address: string;
+
+    // Set by translation files
+    ogs_locales: Record<string, Record<string, Array<string>>>;
+    ogs_countries: Record<string, Record<string, string>>;
+
+    // Set by vite dev server
+    websocket_host: string;
+    OGS_DEV_BACKEND?: "BETA" | "PRODUCTION" | "LOCAL";
+
+    // set in main.tsx
+    user: unknown;
+    data: unknown;
+    preferences: unknown;
+    player_cache: unknown;
+    requests: unknown;
+
+    debug: unknown; // debug.ts
+    socket: unknown; // socket.ts
+
+    // These seem to be part of some very specific debugging.  Can any be removed?
+    mini_goban?: import("goban").GobanRenderer; // MiniGoban
+    dup: Function; // TournamentRecord.tsx
+    rounds?: unknown; // Tournament.tsx
+    players?: unknown; // Tournament.tsx
+    tournament?: unknown; // Tournament.tsx
+    file?: unknown; // image_resizer.ts
+    browserHistory: unknown; // ogsHistory.ts
+    report_manager: unknown; // report_manager.ts
+    sfx: unknown; // sfx.ts
+    sprite_packs: unknown; // sfx.ts
+    swal: unknown; // swal.ts
+    toast: (
+        element: import("react").ReactElement<any>,
+        timeout?: number,
+    ) => import("../src/lib/toast").Toast; // toast.tsx
+    aireview?: unknown; // AIReview.tsx
+    stripe?: unknown; // Supporter.tsx
+    Md5: unknown; // SignIn.tsx
+    Game?: null; // Game.tsx
+    GobanThemes: unknown; // configure-goban.ts
+    GobanEngine: unknown; // configure-goban.ts
+    skew_clock: Function; // misc.ts
+    notification_manager?: unknown; // NotificationManager.tsx
+    proxy?: unknown; // ChatUserList.tsx
+
+    safari?: unknown;
+
+    available_human_matches_list: { [uuid: string]: any };
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,6 +16,7 @@
  */
 
 import * as React from "react";
+import "./Steps.css";
 
 interface StepsProperties {
     completed: number;
@@ -29,11 +30,13 @@ interface StepsProperties {
     // callback?: ()=>any,
 }
 
-export const Steps = (props: StepsProperties) => {
-    let children = (Array.isArray(props.children) ? props.children : (props.children ? [props.children] : [])).concat([]);
+export function Steps(props: StepsProperties): React.ReactElement {
+    const children = (
+        Array.isArray(props.children) ? props.children : props.children ? [props.children] : []
+    ).concat([]);
     if (props.total) {
         while (children.length < props.total) {
-            children.push(<span/>);
+            children.push(<span />);
         }
     }
 
@@ -42,10 +45,10 @@ export const Steps = (props: StepsProperties) => {
             {children.map((element, idx) => {
                 let title;
                 try {
-                    title = element.props.title || (idx + 1);
+                    title = element.props.title || idx + 1;
                 } catch (e) {
                     console.error(e);
-                    title = (idx + 1);
+                    title = idx + 1;
                 }
 
                 let cls = "StepContainer";
@@ -63,18 +66,21 @@ export const Steps = (props: StepsProperties) => {
                 }
 
                 return (
-                    <div key={idx} className={cls} style={{minWidth: props.minWidth || "auto"}}>
+                    <div key={idx} className={cls} style={{ minWidth: props.minWidth || "auto" }}>
                         <div className="title-row">
-                            <span className="title-left"/>
-                            <span className={"title-text" + (props.onChange ? " clickable" : "")} onClick={() => (props.onChange ? props.onChange(idx) : 0)} >{title}</span>
-                            <span className="title-right"/>
+                            <span className="title-left" />
+                            <span
+                                className={"title-text" + (props.onChange ? " clickable" : "")}
+                                onClick={() => (props.onChange ? props.onChange(idx) : 0)}
+                            >
+                                {title}
+                            </span>
+                            <span className="title-right" />
                         </div>
-                        <div className="step-contents">
-                            {element}
-                        </div>
+                        <div className="step-contents">{element}</div>
                     </div>
                 );
             })}
         </div>
     );
-};
+}

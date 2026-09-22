@@ -1,0 +1,267 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+.admin-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    min-height: 0;
+    gap: 0.5rem;
+}
+
+/* Sub-tab strip — underline-style nav for switching between Audit / Tags /
+   Perms / Misc. The underline is the affordance; no background fills. */
+.joseki-admin-tabs {
+    display: flex;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--shade4);
+    gap: 0;
+}
+
+.joseki-admin-tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--shade2);
+    cursor: pointer;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: -1px;
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 500;
+    transition:
+        color 120ms ease,
+        border-color 120ms ease;
+    box-shadow: none;
+    border-radius: 0;
+    line-height: 1;
+
+    &:hover:not(.active) {
+        color: var(--fg);
+    }
+
+    &.active {
+        color: var(--fg);
+        border-bottom-color: var(--primary);
+    }
+
+    &:focus {
+        outline: none;
+    }
+}
+
+/* Contextual metadata under the strip — page-visits line, schema version, etc. */
+.joseki-admin-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    color: var(--shade2);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.joseki-admin-meta-link {
+    background: transparent;
+    border: none;
+    color: var(--primary);
+    cursor: pointer;
+    font-size: inherit;
+    padding: 0;
+    box-shadow: none;
+
+    &:hover {
+        text-decoration: underline;
+    }
+}
+
+.joseki-admin-subhead {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--shade2);
+    margin: 0.5rem 0 0.25rem;
+    font-weight: 500;
+}
+
+.admin-pane {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 0.5rem;
+}
+
+.admin-pane-misc {
+    align-items: flex-start;
+}
+
+/* ---- Audit pane ---- */
+
+.audit-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.audit-filter {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.75rem;
+    color: var(--shade2);
+
+    span {
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    input {
+        font-size: 0.85rem;
+        padding: 0.35rem 0.5rem;
+        width: 100%;
+        box-sizing: border-box;
+    }
+}
+
+.audit-filter-resolved {
+    grid-column: 1 / -1;
+    font-size: 0.8rem;
+    color: var(--shade2);
+}
+
+.audit-reversions {
+    font-size: 0.8rem;
+    color: var(--shade2);
+    padding: 0.25rem 0;
+}
+
+.audit-list {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.audit-empty {
+    color: var(--shade2);
+    font-style: italic;
+    padding: 1rem 0.5rem;
+    text-align: center;
+}
+
+.audit-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    column-gap: 0.5rem;
+    padding: 0.5rem 0.25rem;
+    border-bottom: 1px solid var(--shade5);
+    font-size: 0.85rem;
+
+    .audit-row-line1 {
+        display: contents;
+    }
+
+    .audit-row-line2 {
+        grid-column: 2 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        font-size: 0.78rem;
+        color: var(--shade1);
+    }
+
+    .audit-row-select {
+        display: flex;
+        align-items: center;
+    }
+
+    .position-link {
+        color: var(--primary);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    .audit-row-date {
+        color: var(--shade2);
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+    }
+
+    .audit-row-user {
+        font-weight: 500;
+    }
+
+    .audit-row-action {
+        color: var(--shade1);
+    }
+
+    .audit-row-result {
+        color: var(--shade2);
+        word-break: break-word;
+    }
+}
+
+.audit-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding-top: 0.5rem;
+    color: var(--shade2);
+    font-size: 0.8rem;
+    flex-shrink: 0;
+}
+
+.audit-pagination-btn {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--shade1);
+    cursor: pointer;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.85rem;
+    box-shadow: none;
+    transition:
+        color 120ms ease,
+        background-color 120ms ease;
+
+    &:hover:not(:disabled) {
+        color: var(--fg);
+        background: var(--shade5);
+    }
+
+    &:disabled {
+        color: var(--shade3);
+        cursor: not-allowed;
+    }
+}
+
+.audit-revert-bar {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.5rem 0;
+    background: var(--bg);
+    border-top: 1px solid var(--shade4);
+    flex-shrink: 0;
+    z-index: 1;
+}

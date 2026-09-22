@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,35 +16,58 @@
  */
 
 import * as React from "react";
-import {_, pgettext, interpolate} from "translate";
-import {post, get} from "requests";
+import "./Resizable.css";
 
 interface ResizableProperties {
     id?: string;
     className?: string;
-    onResize?: (w, h) => void;
-    // id?: any,
-    // user?: any,
-    // callback?: ()=>any,
+    onResize?: (w: number, h: number) => void;
+    children?: React.ReactNode;
 }
 
-export class Resizable extends React.Component<any, {}> {
-    refs: {
-        div
-    };
+export class Resizable extends React.Component<ResizableProperties, {}> {
+    div: HTMLDivElement | null = null;
 
     last_width = 0;
     last_height = 0;
-    check_interval = null;
+    check_interval: ReturnType<typeof setInterval> | null = null;
 
-    constructor(props) {
+    constructor(props: ResizableProperties) {
         super(props);
-        this.checkForResize = this.checkForResize.bind(this);
     }
 
-    checkForResize() {
-        let width = this.refs.div.clientWidth;
-        let height = this.refs.div.clientHeight;
+    checkForResize = () => {
+        if (!this.div) {
+            return;
+        }
+
+        const div = this.div;
+        let width: number;
+        let height: number;
+
+        try {
+            height = div.clientHeight;
+            width = div.clientWidth;
+        } catch (e) {
+            /*
+            We're seeing an error
+
+               null is not an object (evaluating 'this.div.clientHeight')
+
+            on mobile safari 11.0
+
+            With the !this.div guard, it seems like this should not be
+            possible, but reality seems to be different.
+
+              - anoek 2017-11-28
+            */
+
+            console.warn("Resizable.checkForResize errored out");
+            console.warn(e);
+            console.warn("This was: ", this);
+            console.warn("Div was: ", div, this.div);
+            throw e;
+        }
 
         if (this.last_width !== width || this.last_height !== height) {
             this.last_width = width;
@@ -53,20 +76,36 @@ export class Resizable extends React.Component<any, {}> {
                 this.props.onResize(width, height);
             }
         }
-    }
+    };
 
     componentDidMount() {
-        this.last_width = this.refs.div.clientWidth;
-        this.last_height = this.refs.div.clientHeight;
+        const div = this.div;
+        if (div) {
+            this.last_width = div.clientWidth;
+            this.last_height = div.clientHeight;
+        }
         this.check_interval = setInterval(this.checkForResize, 50);
     }
+
     componentWillUnmount() {
-        clearInterval(this.check_interval);
+        if (this.check_interval) {
+            clearInterval(this.check_interval);
+        }
     }
+
+    set_div_ref = (el: HTMLDivElement) => {
+        this.div = el;
+    };
 
     render() {
         return (
-            <div ref="div" id={this.props.id} className={"Resizable " + (this.props.className || "")}>{this.props.children}</div>
+            <div
+                ref={this.set_div_ref}
+                id={this.props.id}
+                className={"Resizable " + (this.props.className || "")}
+            >
+                {this.props.children}
+            </div>
         );
     }
 }

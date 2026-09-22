@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,73 +16,98 @@
  */
 
 import * as React from "react";
-import {_, pgettext, interpolate} from "translate";
-import {post, get} from "requests";
-import {errorAlerter} from "misc";
-import {chat_manager, ChatChannelProxy} from "chat_manager";
-import preferences from "preferences";
-import {Player} from "Player";
+import { _, interpolate } from "@/lib/translate";
+import { chat_manager, ChatChannelProxy } from "@/lib/chat_manager";
+import * as preferences from "@/lib/preferences";
+import { Player } from "@/components/Player";
+import "./ChatUserList.css";
 
 interface ChatUserListProperties {
     channel: string;
-    display_name?: string;
 }
 
-export class ChatUserList extends React.PureComponent<ChatUserListProperties, any> {
-    proxy: ChatChannelProxy;
+interface ChatUserCountProperties extends ChatUserListProperties {
+    onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
+    active: boolean;
+}
 
-    constructor(props) {
-        super(props);
-        this.state = {
-            tick: 0,
-            user_sort_order: preferences.get("chat.user-sort-order"),
+export function ChatUserList(props: ChatUserListProperties): React.ReactElement {
+    const [user_sort_order, set_user_sort_order] = React.useState<"alpha" | "rank">(
+        preferences.get("chat.user-sort-order") === "rank" ? "rank" : "alpha",
+    );
+    const [, refresh] = React.useState<number>(0);
+    const proxy = React.useRef<ChatChannelProxy | undefined>(undefined);
+
+    React.useEffect(() => {
+        proxy.current = chat_manager.join(props.channel);
+        proxy.current.on("join", () => refresh(proxy?.current?.channel.users_by_name.length || 0));
+        proxy.current.on("part", () => refresh(proxy?.current?.channel.users_by_name.length || 0));
+        proxy.current.on("join", () => console.log("JOin!"));
+        proxy.current.on("part", () => console.log("Part!"));
+        window.proxy = proxy.current;
+        refresh(proxy.current.channel.users_by_name.length);
+
+        return () => {
+            proxy.current?.part();
         };
-    }
+    }, [props.channel]);
 
-    componentWillMount() {
-        this.init(this.props.channel, this.props.display_name);
-    }
-    componentWillReceiveProps(next_props) {
-        if (this.props.channel !== next_props.channel) {
-            this.deinit();
-            this.init(next_props.channel, next_props.display_name);
-        }
-    }
-    //componentDidUpdate(old_props, old_state) { }
-    componentWillUnmount() {
-        this.deinit();
-    }
-
-    init(channel, display_name) {
-        this.proxy = chat_manager.join(channel, display_name);
-        this.proxy.on("join", () => this.setState({tick: this.state.tick + 1}));
-        this.proxy.on("part", () => this.setState({tick: this.state.tick + 1}));
-    }
-    deinit() {
-        this.proxy.part();
-        this.proxy = null;
-    }
-    toggleSortOrder = () => {{{
-        let new_sort_order = preferences.get("chat.user-sort-order") === "rank" ? "alpha" : "rank";
+    const toggleSortOrder = () => {
+        const new_sort_order = user_sort_order === "rank" ? "alpha" : "rank";
         preferences.set("chat.user-sort-order", new_sort_order);
-        this.setState({"user_sort_order": new_sort_order});
-    }}}
+        set_user_sort_order(new_sort_order);
+    };
 
+    const sorted_users: Array<any> = proxy.current
+        ? user_sort_order === "alpha"
+            ? proxy.current.channel.users_by_name
+            : proxy.current.channel.users_by_rank
+        : [];
 
-    render() {
-        let sorted_users: Array<any> = this.state.user_sort_order === "alpha" ? this.proxy.channel.users_by_name : this.proxy.channel.users_by_rank;
-
-        return (
-            <div className="ChatUserList">
-                <div className="user-header" onClick={this.toggleSortOrder}>
-                    <i className={this.state.user_sort_order === "rank" ? "fa fa-sort-numeric-asc" : "fa fa-sort-alpha-asc"} /> {
-                        interpolate(_("Users : {{in_chat}}"),
-                                    {"in_chat": sorted_users.length})
+    return (
+        <div className="ChatUserList">
+            <div className="user-header" onClick={toggleSortOrder}>
+                <i
+                    className={
+                        user_sort_order === "rank"
+                            ? "fa fa-sort-numeric-asc"
+                            : "fa fa-sort-alpha-asc"
                     }
-                </div>
-
-                {sorted_users.map((user) => <div key={user.id}><Player user={user} flag rank /></div>)}
+                />{" "}
+                {interpolate(_("Users : {{in_chat}}"), { in_chat: sorted_users.length })}
             </div>
-        );
-    }
+
+            {sorted_users.map((user) => (
+                <div key={user.id}>
+                    <Player user={user} flag rank />
+                </div>
+            ))}
+        </div>
+    );
+}
+
+export function ChatUserCount(props: ChatUserCountProperties): React.ReactElement {
+    const [num_users, set_num_users] = React.useState<number>(0);
+    const proxy = React.useRef<ChatChannelProxy | undefined>(undefined);
+
+    React.useEffect(() => {
+        proxy.current = chat_manager.join(props.channel);
+        proxy.current.on("join", () => set_num_users(num_users + 1));
+        proxy.current.on("part", () => set_num_users(num_users - 1));
+        set_num_users(proxy.current.channel.users_by_name.length);
+
+        return () => {
+            proxy.current?.part();
+        };
+    }, [props.channel]);
+
+    return (
+        <button
+            onClick={props.onClick}
+            className={"chat-input-player-list-toggle sm" + (props.active ? " active" : "")}
+        >
+            <i className="fa fa-users" />{" "}
+            {proxy.current ? proxy.current.channel.users_by_name.length : ""}
+        </button>
+    );
 }

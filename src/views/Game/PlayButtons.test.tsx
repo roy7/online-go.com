@@ -1,0 +1,465 @@
+/*
+ * Copyright (C)  Online-Go.com
+ * Copyright (C)  Benjamin P. Jones
+ */
+
+import { PlayButtons } from "./PlayButtons";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import * as React from "react";
+import * as data from "@/lib/data";
+import { GobanControllerContext } from "./goban_context";
+import { OgsHelpProvider } from "@/components/OgsHelpProvider";
+import { GobanController } from "../../lib/GobanController";
+
+const LOGGED_IN_USER = {
+    anonymous: false,
+    id: 123,
+    username: "test_user",
+    registration_date: "2022-05-10 11:03:24.299562+00:00",
+    ratings: {
+        version: 5,
+        overall: { rating: 1500, deviation: 350, volatility: 0.06 },
+    },
+    country: "un",
+    professional: false,
+    ranking: 23,
+    provisional: 0,
+    can_create_tournaments: true,
+    is_moderator: false,
+    is_superuser: false,
+    moderator_powers: 0,
+    offered_moderator_powers: 0,
+    is_tournament_moderator: false,
+    supporter: true,
+    supporter_level: 4,
+    tournament_admin: false,
+    ui_class: "",
+    icon: "https://secure.gravatar.com/avatar/8d809ecc50408afc399a4cb7c8fd4510?s=32&d=retro",
+    email: "",
+    email_validated: false,
+    is_announcer: false,
+    last_supporter_trial: "",
+} as const;
+
+beforeEach(() => {
+    data.set("user", LOGGED_IN_USER);
+});
+
+afterEach(() => {
+    data.remove("user");
+    cleanup();
+});
+
+function WrapTest(props: { controller: GobanController; children: any }): React.ReactElement {
+    const { controller } = props;
+    return (
+        <OgsHelpProvider>
+            <GobanControllerContext.Provider value={controller}>
+                {props.children}
+            </GobanControllerContext.Provider>
+        </OgsHelpProvider>
+    );
+}
+
+describe("PlayButtons", () => {
+    test("renders only resign when it's my opponent's turn.", () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // Black went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+
+        const { container } = render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        // No move controls on the opponent's turn, but a player can always
+        // resign (or cancel) a game that is still in progress.
+        expect(screen.queryByText("Pass")).toBeNull();
+        expect(screen.queryByText("Submit Move")).toBeNull();
+        expect(screen.queryByText("Accept Undo")).toBeNull();
+        expect(container.querySelector(".resign-button")).not.toBeNull();
+    });
+
+    test("normal game when it's my turn.", () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // B
+                [14, 2, 3816], // White went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        // Present
+        expect(screen.getByText("Pass")).toBeDefined();
+        // Early enough that the game can still be cancelled outright.
+        expect(screen.getByText("Cancel game")).toBeDefined();
+
+        // Absent
+        expect(screen.queryByText("Accept Undo")).toBeNull();
+        expect(screen.queryByText("Submit Move")).toBeNull();
+    });
+
+    test("the resign button says Resign once the game can no longer be cancelled", () => {
+        const controller = new GobanController({
+            // Past the 6-move cancellation window (GobanEngine
+            // .gameCanBeCancelled), so cancelling becomes resigning.
+            moves: [
+                [16, 3, 100], // B
+                [3, 2, 100], // W
+                [15, 16, 100], // B
+                [14, 2, 100], // W
+                [4, 4, 100], // B
+                [5, 5, 100], // W
+                [6, 6, 100], // B
+                [7, 7, 100], // White went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        expect(screen.getByText("Resign")).toBeDefined();
+        expect(screen.queryByText("Cancel game")).toBeNull();
+    });
+
+    test('shows "Accept Undo" when opponent requested an undo.', () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // B
+                [14, 2, 3816], // White went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+        controller.goban.engine.undo_requested_by = 456;
+        controller.goban.engine.undo_requested = 4;
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        // Present
+        expect(screen.getByText("Pass")).toBeDefined();
+        expect(screen.queryByText("Accept Undo")).toBeDefined();
+        expect(screen.queryByText("Reject Undo")).toBeDefined();
+
+        // Absent
+        expect(screen.queryByText("Submit Move")).toBeNull();
+        expect(screen.queryByText("Cancel Undo")).toBeNull();
+    });
+
+    test('shows "Accept undo" if undo was requested after initial render', () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // B
+                [14, 2, 3816], // White went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        act(() => {
+            controller.goban.engine.undo_requested_by = 456;
+            controller.goban.engine.undo_requested = 4;
+        });
+
+        // Present
+        expect(screen.getByText("Pass")).toBeDefined();
+        expect(screen.queryByText("Accept Undo")).toBeDefined();
+        expect(screen.queryByText("Reject Undo")).toBeDefined();
+
+        // Absent
+        expect(screen.queryByText("Submit Move")).toBeNull();
+        expect(screen.queryByText("Cancel Undo")).toBeNull();
+    });
+
+    test('shows "Cancel Undo" to the player who requested the undo', () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // B
+                [14, 2, 3816], // White went last
+            ],
+            players: {
+                black: { id: 987, username: "opponent" },
+                white: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+            },
+        });
+
+        act(() => {
+            controller.goban.engine.undo_requested_by = LOGGED_IN_USER.id;
+            controller.goban.engine.undo_requested = 4;
+        });
+
+        const { container } = render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        expect(screen.getByText("Cancel Undo")).toBeDefined();
+        expect(screen.queryByText("Accept Undo")).toBeNull();
+        expect(screen.queryByText("Reject Undo")).toBeNull();
+        expect(container.querySelector(".resign-button")).not.toBeNull();
+    });
+
+    test("engine reports both stones when undoing two moves", () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // B
+                [14, 2, 3816], // W
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+
+        controller.goban.engine.undo_requested = controller.goban.engine.getMoveNumber();
+        controller.goban.engine.undo_requested_move_count = 2;
+
+        const stones = controller.goban.engine.getUndoRequestStones();
+        expect(stones.length).toBeGreaterThanOrEqual(2);
+        expect(stones).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ x: 14, y: 2 }),
+                expect.objectContaining({ x: 15, y: 16 }),
+            ]),
+        );
+    });
+
+    test('shows "Submit Move" when user staged a move.', () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // B
+                [14, 2, 3816], // White went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+        controller.goban.engine.place(10, 10);
+        // usually this is set by a tap event, but I don't really
+        // want to mess with GobanCanvas in these tests.
+        controller.goban.submit_move = jest.fn();
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        // Present
+        expect(screen.getByText("Submit Move")).toBeDefined();
+
+        // Absent
+        expect(screen.queryByText("Accept Undo")).toBeNull();
+        expect(screen.queryByText("Pass")).toBeNull();
+
+        // Check that submit button actually triggers a submit
+        fireEvent.click(screen.getByText("Submit Move"));
+        expect(controller.goban.submit_move).toHaveBeenCalledTimes(1);
+    });
+
+    test("shows the opponent passed notice under Pass in portrait", () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 100], // B
+                [-1, -1, 100], // White passed
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+        controller.setViewMode("portrait");
+
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        expect(screen.getByText("Pass")).toBeDefined();
+        expect(screen.getByText("Opponent passed")).toBeDefined();
+    });
+
+    test("does not show the opponent passed notice in portrait when the opponent played", () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 100], // B
+                [3, 2, 100], // W
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+        controller.setViewMode("portrait");
+
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        expect(screen.getByText("Pass")).toBeDefined();
+        expect(screen.queryByText("Opponent passed")).toBeNull();
+    });
+
+    test("shows Pass on the first move", () => {
+        const controller = new GobanController({
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        // Present
+        expect(screen.getByText("Pass")).toBeDefined();
+
+        // Absent
+        expect(screen.queryByText("Accept Undo")).toBeNull();
+        expect(screen.queryByText("Submit Move")).toBeNull();
+    });
+
+    test("renders no move controls while looking back through the game", () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // Black went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+
+        const { container } = render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        // go back two moves
+        act(() => {
+            controller.goban.engine.showPrevious();
+            controller.goban.engine.showPrevious();
+        });
+
+        // Move controls need the current position; resign does not.
+        expect(screen.queryByText("Pass")).toBeNull();
+        expect(screen.queryByText("Submit Move")).toBeNull();
+        expect(container.querySelector(".resign-button")).not.toBeNull();
+    });
+
+    test("Don't show accept undo if analyzing the game", () => {
+        const controller = new GobanController({
+            moves: [
+                [16, 3, 9136.12], // B
+                [3, 2, 1897.853], // W
+                [15, 16, 4274.0], // B
+                [14, 2, 3816], // White went last
+            ],
+            players: {
+                black: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+                white: { id: 456, username: "test_user2" },
+            },
+        });
+        const goban = controller.goban;
+
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+        // opponent requests undo
+        act(() => {
+            goban.engine.undo_requested_by = 456;
+            goban.engine.undo_requested = 4;
+        });
+        // go back two moves
+        act(() => {
+            goban.engine.showPrevious();
+            goban.engine.showPrevious();
+        });
+
+        expect(screen.queryByText("Accept Undo")).toBeNull();
+    });
+
+    test("forked game where it's the first move, white to play, my move.", () => {
+        const controller = new GobanController({
+            initial_player: "white",
+            players: {
+                black: { id: 456, username: "test_user2" },
+                white: { id: LOGGED_IN_USER.id, username: LOGGED_IN_USER.username },
+            },
+        });
+
+        render(
+            <WrapTest controller={controller}>
+                <PlayButtons />
+            </WrapTest>,
+        );
+
+        // Present
+        expect(screen.getByText("Pass")).toBeDefined();
+
+        // Absent
+        expect(screen.queryByText("Accept Undo")).toBeNull();
+        expect(screen.queryByText("Submit Move")).toBeNull();
+    });
+});

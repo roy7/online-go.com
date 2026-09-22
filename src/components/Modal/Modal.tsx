@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -15,65 +15,118 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-import * as ReactDOM from "react-dom";
-import {OGSComponent} from "components";
+import * as React from "react";
+import * as ReactDOM from "react-dom/client";
+import { TypedEventEmitterPureComponent } from "@/components/TypedEventEmitterPureComponent";
+import "./Modal.css";
 
-let current_modal = null;
-export class Modal<P, S> extends OGSComponent<P&{fastDismiss?: boolean}, S> {
-    constructor(props) {
+let current_modal: any = null;
+
+let open_modal_cb: ((modal: Modal<any, any, any>) => void) | null = null;
+
+type ModalProps<P> = P & { fastDismiss?: boolean };
+export type ModalConstructorInput<P> = ModalProps<P> | Readonly<ModalProps<P>>;
+export class Modal<Events, P, S> extends TypedEventEmitterPureComponent<
+    Events & { close: never; open: never },
+    P & { fastDismiss?: boolean; onClose?: () => void },
+    S
+> {
+    constructor(props: ModalConstructorInput<P>) {
         super(props);
         current_modal = this;
+        if (open_modal_cb) {
+            open_modal_cb(this);
+        }
     }
     close = () => {
+        if (this.props.onClose) {
+            this.props.onClose();
+        }
         this.emit("close");
-    }
-
-    _open = () => {
-        let container = $(ReactDOM.findDOMNode(this)).parent();
-        let backdrop = $("<div class='Modal-backdrop'></div>");
-        $(document.body).append(backdrop);
-
+    };
+    bindContainer(container: HTMLElement) {
         if (this.props.fastDismiss) {
-            container.click((ev) => {
-                if (ev.target === container[0]) {
+            container.onclick = (ev) => {
+                if (ev.target === container) {
                     this.close();
                 }
-            });
+            };
+        }
+    }
+    _open = () => {
+        const backdrop = document.createElement("div");
+        backdrop.className = "Modal-backdrop";
+
+        document.body.appendChild(backdrop);
+
+        if (this.props.fastDismiss) {
+            backdrop.onclick = () => {
+                this.close();
+            };
         }
 
-        let on_escape = (event) => {
+        const on_escape = (event: React.KeyboardEvent<HTMLInputElement>) => {
             if (event.keyCode === 27) {
                 this.close();
             }
         };
-        let on_close = () => {
-            container.remove();
-            backdrop.remove();
+        const on_close = () => {
+            //container.remove();
+            backdrop.parentNode?.removeChild(backdrop);
             this.off("close", on_close);
-            $(document.body).off("keydown", on_escape);
+            document.body.removeEventListener("keydown", on_escape as any);
         };
 
         this.on("close", on_close);
-        $(document.body).on("keydown", on_escape);
+        document.body.addEventListener("keydown", on_escape as any);
 
         this.emit("open");
-    }
-
+    };
     componentDidMount() {
-        super.componentDidMount();
-        this._open();
-    }
-
-    componentWillReceiveProps(newProps: any) {
-        super.componentWillReceiveProps(newProps);
         this._open();
     }
 }
 
-
 export function openModal(modal: any): any {
-    let container = $("<div class='Modal-container'></div>");
-    $(document.body).append(container);
-    ReactDOM.render(modal, container[0]);
+    if (open_modal_cb) {
+        console.warn("Modal already open, calling openModal again might have unexpected results");
+    }
+
+    const container = document.createElement("div");
+    container.className = "Modal-container";
+
+    const root = ReactDOM.createRoot(container);
+    document.body.appendChild(container);
+    root.render(<React.StrictMode>{modal}</React.StrictMode>);
+    open_modal_cb = (modal) => {
+        modal.on("close", () => {
+            root.unmount();
+            container.parentNode?.removeChild(container);
+            open_modal_cb = null;
+        });
+        modal.bindContainer(container);
+    };
     return current_modal;
+}
+
+export function openModalFunctional(
+    eventsRef: { close: () => void },
+    modal: React.ReactElement,
+): void {
+    const container = document.createElement("DIV");
+    document.body.append(container);
+    const root = ReactDOM.createRoot(container);
+
+    function close() {
+        root.unmount();
+        document.body.removeChild(container);
+    }
+
+    eventsRef.close = close;
+
+    root.render(
+        <React.StrictMode>
+            <div className="Modal-container">{modal}</div>
+        </React.StrictMode>,
+    );
 }

@@ -1,0 +1,72 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+import * as React from "react";
+
+export interface GobanViewTabProps {
+    id: string;
+    icon?: string | React.ReactNode;
+    type: "toggle" | "takeover" | "action" | "always";
+    defaultVisible?: boolean;
+    mobilePosition?: "top" | "bottom";
+    align?: "left" | "center" | "right";
+    title?: string;
+    active?: boolean;
+    disabled?: boolean;
+    /** Suppress the tab's button in the bottom tab bar. The panel still
+     *  renders when activated via the imperative setActiveTakeover ref. */
+    hideFromBar?: boolean;
+    /** For hideFromBar takeovers: omit the in-panel close button. Use when
+     *  the panel provides its own way to close (a Done button, or a tab-bar
+     *  action that toggles it). */
+    hideCloseButton?: boolean;
+    /** Make the tab optional. Tabs without a priority always show in the
+     *  tab bar. Tabs with one show only when the bar has room for them, and
+     *  are dropped lowest priority first when it does not. */
+    priority?: number;
+    /** For takeover tabs: keep the goban on screen while this panel is open.
+     *  Portrait takeovers normally cover the whole view, which is fine for
+     *  panels you read (collection lists, settings) but not for panels you
+     *  use *with* the board, like the puzzle editor. Such a panel takes over
+     *  the area below the goban instead of the entire view. No effect in
+     *  landscape, where the goban is always visible beside the sidebar. */
+    keepGobanVisible?: boolean;
+    /** Action-tab click handler. The MouseEvent is forwarded so consumers can
+     *  use `event.currentTarget` to anchor a popover, etc. */
+    onClick?: (event?: React.MouseEvent<HTMLButtonElement>) => void;
+    /** For takeover and toggle tabs: fires whenever this tab transitions
+     *  between active and inactive. Called with `true` when the user clicks
+     *  the tab to open it, and with `false` when the tab deactivates —
+     *  whether by the user clicking it again to close, another takeover
+     *  being opened (displacement), or GobanView forcibly closing it because
+     *  the tab has been removed from the render tree or gained `disabled`.
+     *  Consumers should treat this as the sole authoritative signal to tear
+     *  down per-tab state, or to persist toggle visibility to a preference. */
+    onToggle?: (active: boolean) => void;
+    children?: React.ReactNode;
+}
+
+/**
+ * Declarative tab definition for GobanView.
+ * This component does not render anything itself -- GobanView reads its props
+ * to build the tab bar and content panels.
+ */
+export function GobanViewTab(_props: GobanViewTabProps): React.ReactElement | null {
+    return null;
+}
+
+GobanViewTab.displayName = "GobanViewTab";

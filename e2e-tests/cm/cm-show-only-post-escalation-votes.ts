@@ -1,0 +1,150 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// cspell:words SOPEV
+
+/*
+ * Uses init_e2e data:
+ * - E2E_CM_SOPEV_REPORTED : user who is reported
+ * - "E2E CM SOPEV Game" : game in which the report is made
+ * - E2E_CM_SOPEV_OTHER : The other person in that game
+ * - E2E_CM_SOPEV_INITIAL_VOTER : CM who places initial vote
+ * - E2E_CM_SOPEV_ESCALATOR : CM who escalates the report
+ */
+
+import type { CreateContextOptions } from "@helpers";
+
+import { BrowserContext, TestInfo } from "@playwright/test";
+
+import {
+    captureReportNumber,
+    goToUsersFinishedGame,
+    navigateToReport,
+    newTestUsername,
+    prepareNewUser,
+    reportUser,
+    setupSeededCM,
+} from "@helpers/user-utils";
+
+import { expectOGSClickableByName } from "@helpers/matchers";
+import { expect } from "@playwright/test";
+import { submitReportVote, withReportCountTracking } from "@helpers/report-utils";
+
+export const cmShowOnlyPostEscalationVotesTest = async (
+    {
+        createContext,
+    }: { createContext: (options?: CreateContextOptions) => Promise<BrowserContext> },
+    testInfo: TestInfo,
+) => {
+    const { userPage: reporterPage } = await prepareNewUser(
+        createContext,
+        newTestUsername("CmSOPEVRep"), // cspell:disable-line
+        "test",
+    );
+
+    await withReportCountTracking(reporterPage, testInfo, async (tracker) => {
+        // Report someone for escaping
+        await goToUsersFinishedGame(reporterPage, "E2E_CM_SOPEV_REPORTED", "E2E CM SOPEV Game");
+
+        await reportUser(
+            reporterPage,
+            "E2E_CM_SOPEV_OTHER",
+            "score_cheating",
+            "E2E test - SOPEV reporting score cheating!",
+        );
+
+        // Verify reporter's count increased by 1
+        await tracker.assertCountIncreasedBy(reporterPage, 1);
+
+        // Capture the report number from the reporter's "My Own Reports" page
+        const reportNumber = await captureReportNumber(reporterPage);
+
+        // Now put a pre-escalation vote on the report
+
+        const { seededCMPage: initialVoterPage } = await setupSeededCM(
+            createContext,
+            "E2E_CM_SOPEV_INITIAL_VOTER",
+            reportNumber,
+        );
+
+        // Verify we can see the report with the message
+        await expect(
+            initialVoterPage.getByText("E2E test - SOPEV reporting score cheating!"),
+        ).toBeVisible();
+
+        // Doesn't matter what option we vote for actually, first is handy
+        await initialVoterPage.locator('.action-selector input[type="radio"]').first().click();
+
+        await submitReportVote(initialVoterPage);
+
+        // Now escalate the report
+        const { seededCMPage: escalatorPage } = await setupSeededCM(
+            createContext,
+            "E2E_CM_SOPEV_ESCALATOR",
+            reportNumber,
+        );
+
+        // Verify we can see the report with the message
+        await expect(
+            escalatorPage.getByText("E2E test - SOPEV reporting score cheating!"),
+        ).toBeVisible();
+
+        // escalation is always the last option - yay that's handy
+        await escalatorPage.locator('.action-selector input[type="radio"]').last().click();
+        await escalatorPage.locator("#escalation-note").fill("E2E test - SOPEV escalation note");
+
+        await submitReportVote(escalatorPage);
+
+        // After voting, the system navigates to the next report
+        // Navigate back to our specific report to verify escalation
+        await navigateToReport(escalatorPage, reportNumber);
+
+        await expect(
+            escalatorPage.getByText("Escalated due to VotingOutcome.VOTED_ESCALATION"),
+        ).toBeVisible();
+
+        // Now the previous vote from the initial voter should be gone
+
+        // Make sure the all the escalated voting options are loaded
+        const radioButtons = escalatorPage.locator('.action-selector input[type="radio"]');
+        await expect(radioButtons.nth(6)).toBeVisible();
+
+        // Make sure there are no votes showing
+        const voteCounts = escalatorPage.locator(".vote-count");
+        await expect(voteCounts.first()).toBeVisible();
+        await expect
+            .poll(async () => {
+                const counts = await voteCounts.allTextContents();
+                return counts.length >= 7 && counts.every((count) => count === "(0)");
+            })
+            .toBe(true);
+
+        //  (we probably should make sure that the report is not acted on with pre-escalation votes,
+        //   but that's for another day)
+        // reporter cleans up their report. Navigate directly to the
+        // my_reports route — going via /reports-center and clicking the
+        // sidebar tab is unreliable when the page was previously on
+        // /reports-center/all/<id>.
+        await reporterPage.goto("/reports-center/my_reports");
+
+        const cancelButton = await expectOGSClickableByName(reporterPage, /Cancel$/);
+        await cancelButton.click();
+
+        // After canceling the report, the count should return to initial
+        await tracker.assertCountReturnedToInitial(reporterPage);
+    });
+};

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -18,6 +18,5 @@
 export * from "./About";
 export * from "./legal";
 export * from "./RulesMatrix";
-export * from "./ChangeLog";
 export * from "./Team";
 export * from "./GoResources";

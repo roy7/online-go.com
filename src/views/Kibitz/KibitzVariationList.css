@@ -1,0 +1,302 @@
+.KibitzVariationList {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+
+    .KibitzVariationList-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .KibitzVariationList-clearAll {
+        margin-left: auto;
+    }
+
+    .KibitzVariationList-footerAction {
+        display: block;
+        width: auto;
+        height: auto;
+        margin: 0.15rem 0 0;
+        padding: 0.25rem 0.5rem;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+        color: var(--shade1);
+        font-size: 0.85rem;
+        text-align: left;
+        cursor: pointer;
+
+        &:hover {
+            color: var(--fg);
+            text-decoration: none;
+        }
+
+        /* Nothing to branch from. Reads the way the disabled analysis action
+           in the tab bar does, rather than staying indistinguishable from a
+           live row. */
+        &:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+
+            &:hover {
+                color: var(--shade1);
+            }
+        }
+    }
+
+    .variation-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        touch-action: pan-y;
+        padding-bottom: 0.05rem;
+    }
+
+    .variation-divider {
+        border-top: 1px solid var(--shade3);
+        color: var(--text-dimmed);
+        padding: 0.45rem 0 0.3rem;
+    }
+
+    .variation-divider-current {
+        color: var(--fg);
+        display: inline-block;
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1.15;
+    }
+
+    .variation-divider-grid {
+        align-items: center;
+        display: grid;
+        gap: 0.2rem 0.5rem;
+        grid-template-columns: minmax(0, 1fr);
+        min-width: 0;
+    }
+
+    .variation-divider-titleRowMain {
+        min-width: 0;
+    }
+
+    .variation-divider-game-link {
+        color: var(--fg);
+        display: inline-block;
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1.15;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .variation-divider-players {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem 0.35rem;
+        min-width: 0;
+    }
+
+    .variation-divider-player {
+        align-items: center;
+        display: inline-flex;
+        min-width: 0;
+    }
+
+    .variation-divider-player .Player {
+        align-items: center;
+        display: inline-flex !important;
+        font-size: 0.63rem;
+        line-height: 1;
+        min-width: 0;
+    }
+
+    .variation-divider-player .PlayerIcon {
+        display: block;
+        transform: scale(0.75);
+        transform-origin: center left;
+    }
+
+    .variation-divider-player .flag {
+        font-size: 0.72rem;
+        margin-left: 0.04rem;
+        margin-right: 0.12rem;
+    }
+
+    .variation-divider-player .Player-username {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .variation-divider-player .Player-rank {
+        font-size: 0.86em;
+        margin-left: 0.12rem;
+    }
+
+    .variation-divider-vs {
+        color: var(--text-dimmed);
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+    }
+
+    .variation-items {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    /* Rows follow the room list: one line, primary fill when selected,
+       and the remove button at the right edge. */
+    .variation-item {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        transition:
+            background-color 0.2s ease,
+            color 0.2s ease;
+
+        &:hover {
+            background-color: var(--primary-shade2-blend);
+            color: var(--colored-background-fg);
+        }
+
+        &.selected {
+            background-color: var(--primary);
+            color: var(--colored-background-fg);
+        }
+
+        &:hover .variation-name,
+        &:hover .variation-branch,
+        &:hover .variation-length,
+        &:hover .Player,
+        &:hover .variation-toggle,
+        &.selected .variation-name,
+        &.selected .variation-branch,
+        &.selected .variation-length,
+        &.selected .Player,
+        &.selected .variation-toggle {
+            color: var(--colored-background-fg);
+        }
+
+        &.limit-flash {
+            animation: variation-limit-flash 900ms ease;
+        }
+    }
+
+    .variation-recall {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        min-width: 0;
+        height: auto;
+        margin: 0;
+        padding: 0.25rem 0.5rem;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        text-align: left;
+        touch-action: pan-y;
+    }
+
+    .variation-main {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: baseline;
+        gap: 0.4rem;
+        min-width: 0;
+    }
+
+    .variation-name {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        color: var(--fg);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .variation-meta-row {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.4rem;
+        min-width: 0;
+    }
+
+    .variation-meta-labels {
+        display: inline-flex;
+        gap: 0.35rem;
+        flex: 0 0 auto;
+    }
+
+    .variation-branch,
+    .variation-length {
+        color: var(--text-dimmed);
+        font-size: 0.8rem;
+        white-space: nowrap;
+    }
+
+    .variation-author-row {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        font-size: 0.8rem;
+    }
+
+    .variation-toggle {
+        flex: 0 0 auto;
+        height: auto;
+        margin: 0;
+        padding: 0.25rem 0.5rem;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+        color: var(--shade1);
+        cursor: pointer;
+        font-size: 0.8rem;
+
+        &:hover {
+            color: var(--fg);
+        }
+    }
+
+    @keyframes variation-limit-flash {
+        0% {
+            background: color-mix(in srgb, var(--shade4) 72%, var(--reject) 28%);
+        }
+
+        55% {
+            background: color-mix(in srgb, var(--shade4) 62%, var(--reject) 38%);
+        }
+
+        100% {
+            background: transparent;
+        }
+    }
+
+    .variation-empty {
+        color: var(--text-dimmed);
+        font-size: 0.76rem;
+        line-height: 1.1;
+        padding: 0.4rem 0 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}

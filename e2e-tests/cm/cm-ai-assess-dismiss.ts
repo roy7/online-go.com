@@ -1,0 +1,143 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// Naughtily using the DNEA test data for this test.
+
+// cspell:words CmDontNotRep AIER DNOT DNEA
+
+/*
+ * Uses init_e2e data:
+ * - E2E_CM_DNEA_AI_ACCUSED : user supposedly used AI
+ * - "E2E CM DNEA Game" : game in which the AI use supposedly occurred
+ * - E2E_CM_DNEA_AI_V1, E2E_CM_DNEA_AI_V2, E2E_CM_DNEA_AI_V3 : AI assessors who vote
+ * - E2E_CM_DNEA_AI_D1 : AI detector who can escalate reports
+ * - E2E_CM_DNEA_AI_DETECTOR : CM AI Detector who should not be notified
+ * - E2E_CM_DNEA_AI_ASSESSOR : CM AI Assessor who should not be notified
+ */
+
+import type { CreateContextOptions } from "@helpers";
+
+import { BrowserContext, TestInfo } from "@playwright/test";
+
+import {
+    captureReportNumber,
+    goToUsersFinishedGame,
+    navigateToReport,
+    newTestUsername,
+    prepareNewUser,
+    reportUser,
+    setupSeededCM,
+} from "@helpers/user-utils";
+
+import { expect } from "@playwright/test";
+
+import { submitReportVote, withReportCountTracking } from "@helpers/report-utils";
+
+export const cmAiAssessDismissTest = async (
+    {
+        createContext,
+    }: { createContext: (options?: CreateContextOptions) => Promise<BrowserContext> },
+    testInfo: TestInfo,
+) => {
+    const { userPage: reporterPage } = await prepareNewUser(
+        createContext,
+        newTestUsername("CmDontNotRep"), // cspell:disable-line
+        "test",
+    );
+
+    await withReportCountTracking(reporterPage, testInfo, async (tracker) => {
+        // Report someone for AI use
+        await goToUsersFinishedGame(reporterPage, "E2E_CM_DNEA_AI_ACCUSED", "E2E CM DNEA Game");
+
+        await reportUser(
+            reporterPage,
+            "E2E_CM_DNEA_AI_ACCUSED",
+            "ai_use",
+            "E2E test reporting AI use: I'm sure he cheated!", // min 40 chars
+        );
+
+        // Verify reporter's count increased by 1
+        await tracker.assertCountIncreasedBy(reporterPage, 1);
+
+        // Capture the report number from the reporter's "My Own Reports" page
+        const reportNumber = await captureReportNumber(reporterPage);
+
+        const aiDetectorUser = "E2E_CM_DNEA_AI_D1";
+        const { seededCMPage: aiDetectorCMPage } = await setupSeededCM(
+            createContext,
+            aiDetectorUser,
+            reportNumber,
+        );
+
+        // Verify we can see the full report with the message
+        await expect(
+            aiDetectorCMPage.getByText("E2E test reporting AI use: I'm sure he cheated!"),
+        ).toBeVisible();
+
+        // Select the "assess" option (send to Dan CMs for assessment)
+        await aiDetectorCMPage.locator('input[value="assess_ai_play"]').click();
+
+        // ... then we should be allowed to vote.
+        await submitReportVote(aiDetectorCMPage);
+
+        // Now the CM AI assessors should see it and have to vote
+        const aiAssessors = ["E2E_CM_DNEA_AI_V1", "E2E_CM_DNEA_AI_V2", "E2E_CM_DNEA_AI_V3"];
+
+        for (const aiUser of aiAssessors) {
+            const { seededCMPage: aiCMPage, seededCMContext: aiContext } = await setupSeededCM(
+                createContext,
+                aiUser,
+                reportNumber,
+            );
+
+            // Verify we can see the full report with the message
+            await expect(
+                aiCMPage.getByText("E2E test reporting AI use: I'm sure he cheated!"),
+            ).toBeVisible();
+
+            // Select the human-like option (not AI)
+            await aiCMPage.locator('input[value="human_like"]').click();
+
+            // ... then we should be allowed to vote.
+
+            await submitReportVote(aiCMPage);
+            await aiContext.close();
+        }
+
+        // and the reporter should see it still
+        await reporterPage.goto("/reports-center");
+        await expect(reporterPage.getByText("My Own Reports")).toBeVisible();
+
+        // the AI Detector should be able to dismiss it
+        // After the assessors vote, navigate directly back to the report
+        await navigateToReport(aiDetectorCMPage, reportNumber);
+
+        // Verify we can see the full report with the message
+        await expect(
+            aiDetectorCMPage.getByText("E2E test reporting AI use: I'm sure he cheated!"),
+        ).toBeVisible();
+
+        // Select the "no AI use evident" option to dismiss and inform the reporter
+        await aiDetectorCMPage.locator('input[value="no_ai_use_evident"]').click();
+
+        // Click the vote button (find it fresh on this page)
+        await submitReportVote(aiDetectorCMPage);
+
+        // After dismissal, the reporter's count should return to initial
+        await tracker.assertCountReturnedToInitial(reporterPage);
+    });
+};

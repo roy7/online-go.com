@@ -1,0 +1,205 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+import type { CreateContextOptions } from "@helpers";
+
+import { expect, Page, BrowserContext } from "@playwright/test";
+import { log } from "./logger";
+import { newTestUsername, prepareNewUser } from "@helpers/user-utils";
+
+export interface DemoBoardModalFields {
+    gameName?: string;
+    private?: boolean;
+    rules?: string;
+    boardSize?: string;
+    komi?: string;
+    black_name?: string;
+    black_ranking?: number;
+    white_name?: string;
+    white_ranking?: number;
+}
+
+export const defaultDemoBoardSettings: DemoBoardModalFields = {
+    gameName: "E2E Demo Board",
+    private: false,
+    rules: "japanese",
+    boardSize: "19x19",
+    komi: "automatic",
+    black_name: "Demo Black Player",
+    black_ranking: 38, // 9 Dan
+    white_name: "Demo White Player",
+    white_ranking: 33, // 4 Dan
+};
+
+export const loadDemoBoardCreationModal = async (page: Page) => {
+    const toolsButton = page.getByText("Tools", { exact: true });
+    await expect(toolsButton).toBeVisible();
+    await toolsButton.click();
+
+    const demoBoardButton = page.getByRole("button", { name: "Demo Board" });
+    await expect(demoBoardButton).toBeVisible();
+    await demoBoardButton.click();
+};
+
+export const fillOutDemoBoardCreationForm = async (
+    page: Page,
+    settings: DemoBoardModalFields,
+    options: { fillWithDefaults?: boolean } = { fillWithDefaults: true },
+) => {
+    const final_settings = options.fillWithDefaults
+        ? { ...defaultDemoBoardSettings, ...settings }
+        : settings;
+
+    if (final_settings.gameName !== undefined) {
+        await page.fill("#demo-board-modal-name", final_settings.gameName);
+    }
+
+    if (final_settings.private !== undefined) {
+        const checkbox = page.locator("#demo-board-modal-private");
+        await checkbox.setChecked(final_settings.private);
+    }
+
+    if (final_settings.rules) {
+        await page.locator("#demo-board-modal-rules").selectOption(final_settings.rules);
+    }
+    if (final_settings.boardSize !== undefined) {
+        await page.locator("#demo-board-modal-board-size").click();
+        await page.waitForSelector("#demo-board-modal-board-size", { state: "visible" });
+        log("Board Size:", final_settings.boardSize);
+        await page
+            .locator("select#demo-board-modal-board-size")
+            .selectOption({ label: final_settings.boardSize });
+    }
+
+    if (final_settings.komi !== undefined) {
+        if (final_settings.komi !== "automatic") {
+            await page.selectOption("#demo-board-modal-komi", { value: "custom" });
+            await page.fill("#demo-board-modal-komi-value", final_settings.komi.toString());
+        }
+    }
+
+    const blackInput = page.locator('input.form-control[type="text"][value="Black"]');
+    await blackInput.fill(final_settings.black_name || "Fallback Black Player Name");
+
+    const blackRankSelect = page
+        .locator(".demo-pane-container .left-pane .form-group")
+        .filter({ has: page.locator('label:has-text("Rank")') })
+        .locator("select#demo-board-modal-black-rank");
+
+    await blackRankSelect.selectOption(final_settings.black_ranking?.toString() || "1");
+
+    const whiteInput = page.locator('input.form-control[type="text"][value="White"]');
+    await whiteInput.fill(final_settings.white_name || "Fallback White Player Name");
+
+    const whiteRankSelect = page
+        .locator(".demo-pane-container .right-pane .form-group")
+        .filter({ has: page.locator('label:has-text("Rank")') })
+        .locator("select#demo-board-modal-white-rank");
+
+    await whiteRankSelect.selectOption(final_settings.white_ranking?.toString() || "2");
+};
+
+export interface DemoBoardExpectedFields {
+    boardSize: string;
+    rules: string;
+    blackName: string;
+    blackRank: string;
+    whiteName: string;
+    whiteRank: string;
+}
+
+export const createDemoBoard = async (page: Page, settings: DemoBoardModalFields) => {
+    await loadDemoBoardCreationModal(page);
+    await fillOutDemoBoardCreationForm(page, settings);
+
+    await page.click('button:has-text("Create Demo")');
+    await expect(page).toHaveURL(/.*demo.*/);
+};
+
+export const verifyDemoBoardBasicInfo = async (page: Page, expected: DemoBoardExpectedFields) => {
+    await expect(page.locator(".game-state")).toContainText("Review by");
+    // Assert the main interactive board rendered. Avoid counting bare `.Goban`
+    // nodes: the goban renderer nests `.Goban` divs and the count is an internal
+    // detail (it changed with the renderer). `data-pointers-bound` marks the one
+    // main interactive board — the suite-wide "the board is up" signal.
+    await expect(page.locator(".Goban[data-pointers-bound]")).toBeVisible();
+    await expect(page.locator(".condensed-game-ranked")).toHaveText("Unranked");
+    await expect(page.locator(".condensed-game-rules")).toHaveText(`Rules: ${expected.rules}`);
+};
+
+export const verifyDemoBoardGameModalInfo = async (page: Page, boardSize: string) => {
+    // The game-info action moved into the "More actions" popover (GameActionsPanel)
+    // during the GobanView revamp. Open that popover, then click "Game information".
+    // The GobanView action tabs are icon-only buttons whose label is exposed via the
+    // `title` attribute (not an accessible name), so they must be selected by title.
+    const moreActions = page.locator('button.GobanView-tab-button[title="More actions"]');
+    await expect(moreActions).toBeVisible();
+    await moreActions.click();
+
+    const gameInfo = page
+        .locator("button.GameSidebarPanel-item")
+        .filter({ hasText: "Game information" });
+    await expect(gameInfo).toBeVisible();
+    await gameInfo.click();
+    await page.waitForSelector(".Modal.GameInfoModal", { state: "visible" });
+
+    await page.waitForSelector(
+        `.Modal.GameInfoModal dt:has-text("Board Size") + dd:has-text("${boardSize}")`,
+    );
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".Modal.GameInfoModal")).not.toBeVisible();
+};
+
+export const verifyDemoBoardPlayerInfo = async (page: Page, expected: DemoBoardExpectedFields) => {
+    const blackPlayerUsername = await page
+        .locator("div.black.player-name-container .Player-username")
+        .innerText();
+    expect(blackPlayerUsername).toBe(expected.blackName);
+
+    const blackPlayerRank = await page
+        .locator("div.black.player-name-container .Player-rank")
+        .innerText();
+    expect(blackPlayerRank).toBe(expected.blackRank);
+
+    const whitePlayerUsername = await page
+        .locator("div.white.player-name-container .Player-username")
+        .innerText();
+    expect(whitePlayerUsername).toBe(expected.whiteName);
+
+    const whitePlayerRank = await page
+        .locator("div.white.player-name-container .Player-rank")
+        .innerText();
+    expect(whitePlayerRank).toBe(expected.whiteRank);
+};
+
+export const createAndVerifyDemoBoard = async (
+    createContext: (options?: CreateContextOptions) => Promise<BrowserContext>,
+    settings: DemoBoardModalFields,
+    expected: DemoBoardExpectedFields,
+) => {
+    const { userPage: page } = await prepareNewUser(
+        createContext,
+        newTestUsername("DemoE2E"), // cspell:disable-line
+        "test",
+    );
+
+    await createDemoBoard(page, settings);
+    await verifyDemoBoardBasicInfo(page, expected);
+    await verifyDemoBoardGameModalInfo(page, expected.boardSize);
+    await verifyDemoBoardPlayerInfo(page, expected);
+};

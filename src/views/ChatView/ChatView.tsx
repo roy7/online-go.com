@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,32 +16,82 @@
  */
 
 import * as React from "react";
-import {_, pgettext, interpolate} from "translate";
-import {post, get} from "requests";
-import {errorAlerter} from "misc";
-import {Chat} from "Chat";
+import * as data from "@/lib/data";
+import { useState, useEffect, useCallback } from "react";
+import { ChatChannelList, ChatLog, ChatUsersList } from "@/components/Chat";
+import { useParams } from "react-router-dom";
+import { _ } from "@/lib/translate";
+import "./ChatView.css";
 
+export function ChatView(): React.ReactElement | null {
+    const { channel } = useParams();
 
-interface ChatViewProperties {
-}
+    data.set("chat.active_channel", channel);
 
-export class ChatView extends React.PureComponent<ChatViewProperties, any> {
-    constructor(props) {
-        super(props);
-        this.state = {
+    const [showing_channels, set_showing_channels]: [boolean, (tf: boolean) => void] = useState(
+        false as boolean,
+    );
+    const [showing_users, set_showing_users]: [boolean, (tf: boolean) => void] = useState(
+        false as boolean,
+    );
+
+    useEffect(() => {
+        const oldTitle = window.document.title;
+        window.document.title = _("Chat");
+        return () => {
+            window.document.title = oldTitle;
         };
+    }, [channel]);
+
+    useEffect(() => {
+        set_showing_channels(false);
+        set_showing_users(false);
+    }, [channel]);
+
+    const onShowChannels = useCallback(
+        (tf: boolean) => {
+            if (tf !== showing_channels) {
+                set_showing_channels(tf);
+                set_showing_users(false);
+            }
+        },
+        [channel, showing_channels],
+    );
+
+    const onShowUsers = useCallback(
+        (tf: boolean) => {
+            if (tf !== showing_users) {
+                set_showing_users(tf);
+                set_showing_channels(false);
+            }
+        },
+        [channel, showing_users],
+    );
+
+    if (!channel) {
+        console.error("Null channel passed to ChatView");
+        return null;
     }
 
-    componentDidMount() {
-    }
-    componentWillUnmount() {
-    }
+    const subprops = {
+        channel: channel,
+        showingChannels: showing_channels,
+        showingUsers: showing_users,
+        onShowChannels,
+        onShowUsers,
+    };
 
-    render() {
-        return (
-        <div className="ChatView">
-            <Chat autofocus={true} showChannels={true} showUserList={true} updateTitle={true} />
+    return (
+        <div
+            className={
+                "ChatView " +
+                (showing_channels ? " show-channels" : "") +
+                (showing_users ? " show-users" : "")
+            }
+        >
+            <ChatChannelList {...subprops} />
+            <ChatLog autoFocus={true} updateTitle={true} {...subprops} />
+            <ChatUsersList {...subprops} />
         </div>
-        );
-    }
+    );
 }

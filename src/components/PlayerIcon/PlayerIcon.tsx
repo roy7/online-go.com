@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,91 +16,103 @@
  */
 
 import * as React from "react";
-import player_cache from "player_cache";
-import {errorLogger} from "misc";
-
+import * as player_cache from "@/lib/player_cache";
+import { errorLogger } from "@/lib/misc";
+import { player_is_ignored } from "@/components/BlockPlayer";
+import { _ } from "@/lib/translate";
+import { user_uploads_url } from "@/lib/cdn";
+import "./PlayerIcon.css";
 
 interface PlayerIconProps {
     id?: number;
     user?: any;
-    size?: number | string;
+    size: number | string;
     className?: string;
+    style?: any;
 }
 
-export function icon_size_url(url, size) {
-    return url.replace(/-[0-9]+.png$/, `-${size}.png`).replace(/s=[0-9]+/, `s=${size}`);
+export async function getPlayerIconURL(id: number, size: number): Promise<string> {
+    const user = await player_cache.fetch(id, ["icon"]);
+    return user_uploads_url(user.icon || "", size);
 }
 
-export function getPlayerIconURL(id, size): Promise<string> {{{
-    return new Promise((resolve, reject) => {
-        player_cache.fetch(id, ["icon"]).then((user) => {
-            resolve(icon_size_url(user.icon, size));
-        })
-        .catch(reject);
-    });
-}}}
+export function PlayerIcon(props: PlayerIconProps): React.ReactElement {
+    const [url, setUrl] = React.useState<string | undefined>(undefined);
 
+    const subscriber = React.useRef<player_cache.Subscriber | undefined>(undefined);
+    const previousId = React.useRef<number | null>(null);
+    const id = getId(props);
 
-export class PlayerIcon extends React.PureComponent<PlayerIconProps, {url}> {
-    mounted: boolean = false;
-    listener;
-
-    constructor(props) {
-        super(props);
-        let id = parseInt(props.id || props.user.id || props.user.user_id);
-        if (isNaN(id)) {
-            console.log("bailing", props);
-            this.state = { url: null };
+    React.useEffect(() => {
+        if (!id) {
+            setUrl(undefined);
+            previousId.current = null;
             return;
         }
 
-        let user = player_cache.lookup(id);
-        let size = props.size;
-        this.state = {
-            url: user && user.icon ? icon_size_url(user.icon, size) : null
+        const user = player_cache.lookup(id);
+        const size = typeof props.size === "number" ? props.size : parseInt(props.size);
+        const nextUrl = user_uploads_url(user?.icon, size);
+        const isNewId = previousId.current !== id;
+        previousId.current = id;
+
+        if (nextUrl) {
+            setUrl(nextUrl);
+        } else if (isNewId) {
+            setUrl(undefined);
+        }
+
+        if (!nextUrl) {
+            fetchIconUrl(id, props);
+        }
+
+        subscriber.current = new player_cache.Subscriber((user) => fetchIconUrl(user.id, props));
+        subscriber.current.on(id);
+
+        let cancelled = false;
+
+        return () => {
+            cancelled = true;
+            subscriber.current?.off(subscriber.current.players());
+            delete subscriber.current;
         };
-        if (!this.state.url) {
-            this.fetch(id, props);
+
+        function fetchIconUrl(id: number, props: PlayerIconProps): void {
+            getPlayerIconURL(id, parseInt(`${props.size}`))
+                .then((url) => {
+                    if (!cancelled && url) {
+                        setUrl(url);
+                    }
+                })
+                .catch(errorLogger);
         }
-        this.listener = player_cache.watch(id, (_user) => {
-            this.fetch(id, this.props);
-        });
-    }
-    fetch(id, props) {
-        getPlayerIconURL(id, props.size).then((url) => {
-            if (id === parseInt(props.id || props.user.id || props.user.user_id)) {
-                if (this.mounted && this.state.url !== url) {
-                    this.setState({url: url});
-                }
-            }
-        })
-        .catch(errorLogger);
-    }
-    componentDidMount() {
-        this.mounted = true;
-    }
-    componentWillUnmount() {
-        this.mounted = false;
-    }
-    componentWillReceiveProps(next_props) {
-        let current_id = parseInt(this.props.id || this.props.user.id || this.props.user.user_id);
-        let next_id = parseInt(next_props.id || next_props.user.id || next_props.user.user_id);
-        if (current_id !== next_id) {
-            this.setState({url: null});
-            this.listener.remove();
-            this.listener = player_cache.watch(next_id, (_user) => {
-                this.fetch(next_id, next_props);
-            });
+    }, [id, props.size]);
 
-
-            if (isNaN(next_id)) {
-                return;
-            }
-
-            this.fetch(next_id, next_props);
-        }
+    if (url && id && !player_is_ignored(id)) {
+        return (
+            <img
+                className={`PlayerIcon PlayerIcon-${props.size} ${props.className || ""}`}
+                src={url}
+                style={props.style}
+                alt={_("Profile picture")}
+            />
+        );
     }
-    render() {
-        return <img className={`PlayerIcon PlayerIcon-${this.props.size} ${this.props.className || ""}`} src={this.state.url} />;
+
+    return (
+        <span
+            className={`PlayerIcon PlayerIcon-${props.size} ${props.className || ""}`}
+            style={props.style}
+        />
+    );
+}
+
+function getId(props: PlayerIconProps): number | null {
+    let ret: number | null = parseInt(
+        props.id || (props.user && (props.user.id || props.user.user_id)),
+    );
+    if (isNaN(ret)) {
+        ret = null;
     }
+    return ret;
 }

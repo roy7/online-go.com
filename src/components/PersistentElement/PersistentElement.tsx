@@ -1,32 +1,45 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
- * This program is free software: you can redistribute it and/or modify
+ * program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of the
  * License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
+ * program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 import * as React from "react";
 
-export class PersistentElement extends React.Component<{elt; className?}, any> {
-    refs: {
-        elt;
-    };
+interface PersistentElementProps {
+    elt: HTMLElement;
+    className?: string;
+    /** hash of new props to put on the element */
+    extra_props?: React.DetailedHTMLProps<React.HTMLAttributes<HTMLDivElement>, HTMLDivElement>;
+}
 
-    componentDidMount() {
-        $(this.refs.elt).append(this.props.elt);
-    }
+export function PersistentElement(props: PersistentElementProps): React.ReactElement {
+    const container = React.useRef<HTMLDivElement>(null);
 
-    render() {
-        return <div className={this.props.className || ""} ref="elt"/>;
-    }
+    React.useEffect((): (() => void) | void => {
+        if (container.current) {
+            if (props.elt) {
+                const cont = container.current;
+                cont.appendChild(props.elt);
+                return () => {
+                    cont.removeChild(props.elt);
+                };
+            } else {
+                console.warn("PersistentElement: element not found", props.elt);
+            }
+        }
+    }, [container.current, props.elt]);
+
+    return <div className={props.className || ""} {...props.extra_props} ref={container} />;
 }

@@ -1,0 +1,41 @@
+This is information for Agents to take into account when working on e2e tests.
+
+(Some useful information for humans to know as well :) )
+
+When creating e2e tests, note that:
+
+- When writing tests that use UI elements to achieve outcomes, always check the UI code of of the elements you're using to make sure you are using them correctly.
+  -- DO NOT guess how the UI works when developing tests, check how it works in the code.
+
+- When entering inputs, include a check to make sure the input was accepted before proceeding to the next action.
+
+- Submit moderation votes with `submitReportVote`. It waits for the server response before navigation or context cleanup can cancel the request.
+
+- Wrap report scenarios in `withReportCountTracking` or `withIncidentIndicatorLock` for their timeout and logging. These wrappers do not serialize tests. Select reports by their full ID and count only reports owned by the test's reporter. Other workers can have open reports.
+
+(The problem is that tests can fail if the wrong number of reports is open, due to previously failed tests)
+
+- Any actions or assertions using buttons need to use `expectOGSClickable` to find the button, because OGS buttons are implemented in a range of ways.
+
+- Users (user data) can be created either by seeding it or using `prepareNewUser`.
+
+- Seeded data is to be used when we need users with privileges that can only be given by full moderators. We do not have full moderator powers in the test suite.
+
+- `prepareNewUser` creates a new user with suitable settings and guaranteed unique name.
+
+- The string argument of `newTestUsername` is length-checked against the server's 30-character username cap. Roles can contain up to 16 characters; a cryptographically random ten-digit suffix keeps names distinct without generating words that the username filter rejects. The limit is computed in `helpers/test-username.ts`. Keep roles short and descriptive (e.g. `ERPBAcc`, `LWARNOth`).
+
+- Drive the behavior under test through the UI. Account fixture setup may use the API; `registerNewUser` and `loginAsUser` retain UI coverage of registration and login. Read-only API checks may wait for persisted state, such as a finished game, instead of fixed sleeps. Do not use the API to perform the action being tested.
+
+- We do all our testing in English, we don't have to worry about pgettext
+
+- Community Moderation is controlled by MODERATOR_POWERS. This is different to "full moderation", which is controlled by is_moderator.
+
+- When writing tests that use UI elements to achieve outcomes, always check the UI code of of the elements you're using to make sure you are using them correctly.
+  -- DO NOT guess how the UI works when developing tests, check how it works in the code.
+
+- The `@Slow` tag in an `ogsTest("@Slow ...", ...)` name is reserved for tests that need a larger-than-default time budget because the behaviour under test takes a long time. The usual case is an explicit long wait — e.g. a 5-minute timeout being verified. A test should not get the tag just because it touches a few UI elements; "long because it does a lot" is normally a smell, not a justification.
+
+    Exception: a test that legitimately needs a long time budget because it builds up a cumulative scenario (e.g. playing several games in sequence to accrue the state under test) may carry `@Slow`. When you do this, raise the test's own `TIMEOUT_MS` accordingly and add a one-line comment in the test file explaining why the tag is present. Otherwise the tag drifts and stops meaning anything.
+
+    When adding a new test alongside one tagged `@Slow`, don't inherit the tag without checking whether _this_ test's behaviour is actually time-gated.

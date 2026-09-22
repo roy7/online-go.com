@@ -1,0 +1,562 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/* The Game view applies both `Game` and `MainGobanView` classes to the
+ * GobanView root. `MainGobanView` is preserved for backward compat with
+ * Players.css and Clock.css selectors. */
+
+.Game {
+    .hidden,
+    .hidden.active,
+    .hidden:focus,
+    .hidden:hover {
+        background-color: var(--hidden-bg);
+    }
+
+    .malkovich,
+    .malkovich.active,
+    .malkovich:focus,
+    .malkovich:hover {
+        background-color: var(--malkovich-bg);
+    }
+
+    .personal,
+    .personal.active,
+    .personal:focus,
+    .personal:hover {
+        background-color: var(--personal-bg);
+    }
+
+    .submit-button {
+        white-space: nowrap;
+    }
+    .autofocus-submit-button:focus::after {
+        content: " ⏎";
+    }
+    .autofocus-submit-button:active::after {
+        content: none;
+    }
+
+    .simul-warning {
+        color: var(--danger);
+        font-weight: bold;
+        font-size: 1.2rem;
+        text-align: center;
+        margin-bottom: 0.5rem;
+    }
+}
+
+.condensed-game-information {
+    display: flex;
+    font-size: 75%;
+    margin-left: 0.5rem;
+    margin-right: 0.5rem;
+
+    div {
+        flex-grow: 1;
+    }
+
+    .condensed-game-rules {
+        text-align: right;
+    }
+}
+
+/* Game.zen overrides GobanView's top offset so the board can fill the screen. */
+.GobanView.Game.zen {
+    top: 0;
+}
+
+/* Compact mode shows the move number between the players above the board,
+ * so the button-only move controls drop their "Move #" label. */
+.GobanView.Game.compact .MoveNumberControl-buttons .MoveNumberControl-move-number {
+    display: none;
+}
+
+.MainGobanView {
+    /* The shared GobanView chrome (GobanView.css) keeps its roomier
+     * default insets for the other consumers (joseki, puzzle, kibitz);
+     * the Game view opts into a tighter, flush layout: panels manage
+     * their own padding, and the chat runs against the sidebar's inner
+     * bottom edge. */
+    .GobanView-header {
+        padding: 0.4rem 0.75rem;
+        font-size: 1.3rem;
+    }
+    .GobanView-sidebar-content {
+        padding: 0;
+    }
+    .GobanView-tab-panel {
+        padding: 0;
+    }
+
+    /* The always-panel needs to be a flex column that fills the sidebar so
+     * the chat (its last child) can stretch to the bottom. */
+    .GobanView-tab-panel.always:not(.hidden) {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    /* .players is handled in Players.css */
+    .game-state {
+        font-size: 1.3rem;
+        font-weight: 700;
+        text-align: center;
+    }
+
+    .rengo-header {
+        font-style: italic;
+        font-size: smaller;
+    }
+
+    .conditional-move-planner {
+        text-align: center;
+
+        .buttons {
+            display: flex;
+            justify-content: space-between;
+
+            button {
+                min-height: 2em;
+                height: auto;
+            }
+        }
+    }
+
+    .game-analyze-button-bar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        user-select: none;
+
+        .stone-button {
+            line-height: 2rem;
+        }
+
+        img {
+            width: 1rem;
+            height: 1rem;
+        }
+
+        input {
+            width: 2rem;
+            height: 2rem;
+            line-height: 1rem;
+            padding: 0;
+            margin: 0;
+            border: 0;
+        }
+    }
+
+    .chat-container {
+        flex-shrink: 1;
+        flex-grow: 1;
+    }
+
+    input.volume-slider {
+        width: 8rem;
+        max-width: 70%;
+        display: inline-block;
+    }
+
+    /* Mobile (portrait) layout: the two player cards straddle the board —
+     * the opponent above it, the local player below it — each one full
+     * width in its own .GameMobilePlayers wrapper. A card is a 2-row grid:
+     *
+     *       col1        col2         col3
+     *     ┌──────┬─────────────┬─────────┐
+     *   1 │      │ name        │         │
+     *     │ icon ├─────────────┤  clock  │  ← icon and clock each span
+     *   2 │      │ score       │         │    both rows
+     *     └──────┴─────────────┴─────────┘
+     *
+     * The icon and the clock fill the card's full height on either side and
+     * centre in it, with the name and the score stacked between them.
+     *
+     * Extra specificity (`.player-icons`) is required throughout to win
+     * against the same-length `.MainGobanView.portrait .player-icons ...`
+     * rules in Players.css. */
+    &.mobile .GameMobilePlayers {
+        flex-shrink: 0;
+
+        .player-icons {
+            display: flex;
+            flex-direction: row;
+            width: 100%;
+        }
+
+        .player-icons .player-container {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            grid-template-rows: auto auto;
+            column-gap: 0.5rem;
+            row-gap: 0.1rem;
+            width: 100%;
+            padding: 0.3rem 0.5rem;
+            min-width: 0;
+            /* Full-width cards sit flush against the board, so they carry no
+             * border of their own. */
+            border: none;
+        }
+
+        /* Flatten the icon-clock-row so the icon and clock can land in
+         * their own grid cells (col 1 and col 3 respectively). */
+        .player-icons .player-icon-clock-row {
+            display: contents;
+        }
+
+        .player-icons .player-icon-container {
+            grid-column: 1;
+            grid-row: 1 / span 2;
+            align-self: center;
+            flex-basis: 2.5rem;
+            min-height: 2.5rem;
+            min-width: 2.5rem;
+            width: 2.5rem;
+            height: 2.5rem;
+        }
+
+        .player-icons .player-name-container,
+        .player-icons .player-name-plain {
+            grid-column: 2;
+            grid-row: 1;
+            align-self: start;
+            font-size: 0.8rem;
+            line-height: 1.1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
+
+        .player-icons .score-container {
+            grid-column: 2;
+            grid-row: 2;
+            align-self: end;
+            margin-top: 0;
+            justify-content: flex-start;
+            /* Players.css relies on space-between to separate the score
+             * items; with flex-start they'd run together ("0+ 0.5"), so
+             * restore the separation with an explicit gap. */
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            line-height: 1.1;
+        }
+
+        /* The Player component's leading margin would set the name in from
+         * the column edge, out of line with the score stacked below it. */
+        .player-icons .Player-username {
+            margin-left: 0;
+        }
+
+        /* Hide the "captures" unit text on mobile — just show the count
+         * since the row's already labelled by context. */
+        .player-icons .num-captures-units {
+            display: none;
+        }
+
+        /* The clock owns the right-hand column outright, so the face and
+         * the digits sit level with the middle of the card rather than
+         * hanging off the score row. */
+        .player-icons .in-game-clock {
+            grid-column: 3;
+            grid-row: 1 / span 2;
+            align-self: center;
+            justify-self: end;
+            justify-content: flex-end;
+            font-size: 0.9rem;
+            line-height: 1.2;
+        }
+    }
+
+    /* Unread marker on the mobile chat tab's comment icon. */
+    .game-chat-tab-icon {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+
+        .game-chat-unread-dot {
+            position: absolute;
+            top: -0.15rem;
+            right: -0.3rem;
+            width: 0.5rem;
+            height: 0.5rem;
+            border-radius: 50%;
+            background: var(--reject);
+        }
+    }
+
+    /* Zen mode: full-screen board on the left, transparent sidebar with the
+     * essential controls vertically centered on the right. The navbar is
+     * hidden globally via body.zen, and `.GobanView.Game.zen { top: 0 }`
+     * (above) lets the goban occupy the full viewport height. */
+    &.zen {
+        background-color: var(--bg);
+
+        /* Hide the chat, analyze toolbar, move tree, tab bar and full-page
+         * AI review in zen mode — they aren't part of the focused view. */
+        .chat-container,
+        .game-analyze-button-bar,
+        #move-tree-container,
+        .AIReview,
+        .condensed-game-information,
+        .GobanView-tab-bar {
+            display: none;
+        }
+
+        .GobanView-sidebar {
+            background: transparent;
+            border-radius: 0;
+            box-shadow: none;
+            margin: 0;
+        }
+
+        /* Stack the few items that remain — player cards, controls — so they
+         * read top to bottom centered in the column. The always-panel keeps
+         * its flex-grow: 1 (from the .MainGobanView rule above), so the
+         * centering has to happen inside the panel itself — centering the
+         * sidebar-content children does nothing when one child fills all
+         * the space. */
+        .GobanView-sidebar-content {
+            justify-content: center;
+        }
+
+        .GobanView-tab-panel.always:not(.hidden) {
+            justify-content: center;
+        }
+
+        /* The slider strip keeps its own panel chrome (background + border),
+         * which reads as a stray grey card on zen's transparent sidebar. */
+        .MoveNumberControl {
+            background: transparent;
+            border-top: none;
+        }
+
+        .player-icons {
+            flex-direction: column;
+
+            .player-container {
+                width: 100%;
+            }
+        }
+
+        .PlayControls {
+            flex-grow: 0;
+        }
+
+        /* The only on-screen way out of zen: a quiet glyph pinned to the
+         * top right corner of the viewport, above the board and sidebar. */
+        .leave-zen-mode-button {
+            position: fixed;
+            top: 0.5rem;
+            right: 0.5rem;
+            z-index: var(--z-dock);
+            height: auto;
+            min-height: 0;
+            padding: 0.25rem;
+            border: none;
+            background: transparent;
+            box-shadow: none;
+            font-size: 2rem;
+            line-height: 1;
+            color: var(--shade3);
+            cursor: pointer;
+
+            &:hover,
+            &:focus-visible {
+                color: var(--fg);
+            }
+        }
+    }
+}
+
+/* Portrait: the Game view runs its panels flush to the viewport's
+ * left/right/bottom edges, overriding the shared GobanView insets kept
+ * for the other consumers. The extra .GobanView class outranks the
+ * equal-specificity shared portrait rules regardless of import order. */
+.GobanView.MainGobanView.portrait {
+    /* The action area runs edge to edge under the bottom player card and
+     * reads as the top of the panel slab below it. */
+    .GameActionArea {
+        box-sizing: border-box;
+        padding: 0 0.5rem;
+        background: var(--shade5);
+    }
+
+    .GobanView-mobile-panels {
+        padding: 0.5rem 0 0;
+
+        .GobanView-tab-panel {
+            padding: 0 0 0.75rem;
+        }
+
+        /* The always panel runs to the viewport bottom on mobile — the
+         * chat area inside it has its own scroll, so the wrapper doesn't
+         * need its own bottom breathing room. */
+        .GobanView-tab-panel.always {
+            padding-bottom: 0;
+        }
+    }
+
+    /* Zen mode. Pinned to the top right corner, the exit button would
+     * cover the top player's clock, so it takes the place of the hidden
+     * tab bar as the last row of the column instead. The panels drop
+     * their slab, as the zen sidebar does in landscape. */
+    &.zen {
+        /* The free space goes above the board, which pushes the board and
+         * the player cards down near the thumb. When the column is too
+         * short, the auto margin becomes zero and the top stays in reach
+         * of the scroll. */
+        .GobanView-stage {
+            margin-top: auto;
+        }
+
+        .GobanView-mobile-panels {
+            flex-grow: 0;
+            background: transparent;
+        }
+
+        .leave-zen-mode-button {
+            position: static;
+            align-self: flex-end;
+            flex-shrink: 0;
+            margin: 0 calc(0.5rem + env(safe-area-inset-right))
+                calc(0.5rem + var(--safe-area-inset-bottom)) 0;
+        }
+    }
+}
+
+.chat-container {
+    /* Prevent silly Firefox from collapsing empty editable lines */
+    .qc-option[contenteditable="true"] {
+        min-height: 1em;
+    }
+}
+
+/* *************************** */
+/* ** Conditional Move tree ** */
+/* *************************** */
+.ctrl-conditional-tree {
+    text-align: left;
+    padding-left: 0.5em;
+    padding-right: 0.5em;
+}
+
+.conditional-move-tree-container {
+    overflow: auto;
+    height: 12em;
+    text-align: left;
+    padding-top: 0.3rem;
+
+    ul.tree,
+    ul.tree ul {
+        background: url("tree-vline.png") repeat-y;
+    }
+
+    ul.tree {
+        list-style-type: none;
+        margin: 0;
+        padding: 0;
+
+        ul {
+            list-style-type: none;
+            margin: 0;
+            padding: 0;
+            margin-left: 10px;
+        }
+
+        li {
+            margin: 0;
+            padding: 0 12px;
+            line-height: 20px;
+            font-weight: bold;
+            background: url("tree-node.png") no-repeat;
+        }
+
+        li.last,
+        li:last-child {
+            background: url("tree-lastnode.png") no-repeat;
+        }
+    }
+
+    .move-row,
+    .move-current {
+        white-space: nowrap;
+        cursor: pointer;
+        font-weight: bold;
+        user-select: none;
+
+        .stone {
+            border: 0.1em solid #888;
+            border-radius: 5em;
+            width: 0.8em;
+            height: 0.8em;
+            display: inline-block;
+            margin-left: 0.5em;
+            margin-right: 0.5em;
+        }
+
+        .white.stone {
+            background-color: #fff;
+            border-color: #000;
+        }
+
+        .black.stone {
+            background-color: #000;
+            border-color: #999;
+        }
+
+        .entry {
+            border: 1px solid transparent;
+            padding-right: 0.5em;
+            border-radius: 0.2rem;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .entry:hover {
+            background-color: var(--shade4);
+            border: 1px solid transparent;
+            border-color: var(--primary);
+        }
+
+        .entry.selected,
+        &.selected {
+            background-color: var(--shade4);
+            border: 1px solid transparent;
+            border-color: var(--primary);
+        }
+
+        .entry.selected:hover,
+        &.selected:hover {
+            background-color: var(--shade3);
+            border: 1px solid transparent;
+            border-color: var(--primary);
+        }
+    }
+
+    .delete-move {
+        color: red;
+        margin-left: 0.7em;
+        margin-top: 0em !important;
+        text-align: top;
+        cursor: pointer;
+    }
+}

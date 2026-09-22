@@ -1,0 +1,308 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/*
+ * A ladder player may have at most three open games they initiated. A game
+ * whose opponent is on vacation is paused, so it should not occupy one of
+ * those slots - and a player already on vacation cannot be challenged at all.
+ *
+ * Flow:
+ * 1. P1 creates a public group; P1-P6 join it and its 9x9 ladder in order,
+ *    so P6 sits at the bottom and can challenge everyone above.
+ * 2. P6 challenges P1, P2 and P3 - at the cap. P4 reports 0x005.
+ * 3. P5, never challenged, goes on vacation and reports 0x009.
+ * 4. P1 goes on vacation. P6's count drops to two and P4 becomes challengeable.
+ * 5. P6 challenges P4 - four open games, three counting.
+ * 6. P5 ends vacation (0x009 gives way to the cap), then P1 ends vacation:
+ *    P6 is at four counting, and P5 reports 0x005 again.
+ * 7. Teardown (in a finally, so it runs even when an assertion fails): P1
+ *    deletes the group, taking its three ladders with it, and the test
+ *    confirms they are gone.
+ */
+
+import type { CreateContextOptions } from "@helpers";
+
+import { BrowserContext, Page, TestInfo } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { setupSeededUser } from "@helpers/user-utils";
+import { expectOGSClickableByName } from "@helpers/matchers";
+import { log } from "@helpers/logger";
+import { actAndWaitForResponse } from "@helpers/requests";
+import { ensureVacationOff, setVacation } from "@helpers/vacation-utils";
+
+/** Open a ladder row's popover by the player's username. */
+const openRowPopover = async (page: Page, username: string) => {
+    const row = page.locator(".LadderRow").filter({ hasText: username });
+    await expect(row).toBeVisible({ timeout: 15000 });
+    await row.click();
+};
+
+/** Challenge a player from the ladder page, confirming the dialog. */
+const challengePlayer = async (page: Page, ladderUrl: string, username: string) => {
+    await page.goto(ladderUrl);
+    await openRowPopover(page, username);
+
+    const challengeButton = await expectOGSClickableByName(page, /^Challenge$/);
+    await challengeButton.click();
+
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog.getByText(/Are you ready to start your game with/)).toBeVisible();
+    const yesButton = await expectOGSClickableByName(page, /^Yes!$/);
+    const ladderId = ladderUrl.match(/\/ladder\/(\d+)/)?.[1];
+    expect(ladderId).toBeDefined();
+    await actAndWaitForResponse(
+        page,
+        { method: "POST", path: `/api/v1/ladders/${ladderId}/players/challenge` },
+        () => yesButton.click(),
+    );
+
+    await expect(dialog).not.toBeVisible({ timeout: 30000 });
+};
+
+/**
+ * Delete the test's group as its founder, removing its ladders with it.
+ */
+const deleteGroup = async (page: Page, groupUrl: string) => {
+    await page.goto(groupUrl);
+
+    // The pencil toggles edit mode; "Delete Group" only renders while editing.
+    const editToggle = page.locator("i.fa-pencil").first();
+    await expect(editToggle).toBeVisible({ timeout: 15000 });
+    await editToggle.click();
+
+    const deleteButton = await expectOGSClickableByName(page, /Delete Group/);
+    await deleteButton.click();
+
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog.getByText(/Are you SURE you want to delete this group/)).toBeVisible();
+    const okButton = dialog.getByRole("button", { name: "OK" });
+    await expect(okButton).toBeVisible();
+    await okButton.click();
+
+    // deleteGroup() redirects to /groups/ on success.
+    await page.waitForURL(/\/groups\/?$/, { timeout: 30000 });
+};
+
+export const ladderVacationChallengeLimitTest = async (
+    {
+        createContext,
+    }: { createContext: (options?: CreateContextOptions) => Promise<BrowserContext> },
+    testInfo: TestInfo,
+) => {
+    // @Slow: this test signs in six seeded players, creates a group, joins six
+    // players to a ladder and starts four correspondence games to build up the
+    // open-challenge state the assertions check. The time is cumulative setup,
+    // not an explicit wait - see e2e-tests/CLAUDE.md for the rule.
+    const TIMEOUT_MS = 600 * 1000;
+    testInfo.setTimeout(TIMEOUT_MS);
+
+    log("=== Ladder Vacation Challenge Limit Test ===");
+
+    const ladderPlayers = Array.from(
+        { length: 6 },
+        (_, index) => `E2E_LADDER_${testInfo.parallelIndex}_P${index + 1}`,
+    );
+
+    // 1. Sign in all six seeded players.
+    const pages: Page[] = [];
+    for (const username of ladderPlayers) {
+        const { userPage } = await setupSeededUser(createContext, username);
+        pages.push(userPage);
+    }
+    // Indices 0, 4 and 5 are P1, P5 and P6 - the only pages the flow drives
+    // directly after everyone has joined.
+    const [p1Page, , , , p5Page, p6Page] = pages;
+
+    // Use a fresh ladder and explicitly restore account-wide vacation state.
+    log("P1 creating a group...");
+
+    // Declared outside the try so the finally below can still reach them to tear
+    // the group down, even if a step inside the try throws before both are
+    // assigned - see the undefined check in the finally.
+    let groupUrl: string | undefined;
+    let ladderUrl: string | undefined;
+    let testFailed = false;
+
+    try {
+        await Promise.all([ensureVacationOff(p1Page), ensureVacationOff(p5Page)]);
+
+        await p1Page.goto("/group/create");
+
+        const groupName = `E2E Ladder Vac ${Date.now()}`;
+        const groupNameInput = p1Page.locator("#group-create-name");
+        await expect(groupNameInput).toBeVisible();
+        await groupNameInput.fill(groupName);
+        await expect(groupNameInput).toHaveValue(groupName);
+
+        // Public by default (GroupCreate.tsx) - assert rather than toggle.
+        await expect(p1Page.locator("#group-create-public")).toBeChecked();
+
+        const createGroupButton = await expectOGSClickableByName(p1Page, /Create your group!/);
+        await createGroupButton.click();
+        await p1Page.waitForURL(/\/group\/\d+/, { timeout: 30000 });
+
+        groupUrl = p1Page.url();
+        log(`Group created at: ${groupUrl}`);
+
+        // Find the 9x9 ladder URL from the group page.
+        const ladderLink = p1Page.getByRole("link", { name: "9x9 Ladder" });
+        await expect(ladderLink).toBeVisible();
+        await expect(ladderLink).toHaveAttribute("href", /\/ladder\/\d+$/);
+        const ladderHref = await ladderLink.getAttribute("href");
+        ladderUrl = ladderHref as string;
+        log(`9x9 ladder at: ${ladderUrl}`);
+
+        // 3. Each player joins the group, then the ladder, in order. Join order sets
+        //    ladder rank, so P6 ends up at the bottom.
+        for (let i = 0; i < pages.length; i++) {
+            const page = pages[i];
+            const username = ladderPlayers[i];
+
+            if (i > 0) {
+                // P1 created the group and is already a member.
+                await page.goto(groupUrl);
+                const joinGroup = await expectOGSClickableByName(page, /Join Group/);
+                const groupId = new URL(groupUrl).pathname.split("/").pop();
+                await actAndWaitForResponse(
+                    page,
+                    { method: "POST", path: `/api/v1/groups/${groupId}/members` },
+                    () => joinGroup.click(),
+                );
+                await expect(page.getByRole("button", { name: /Leave Group/ })).toBeVisible();
+            }
+
+            await page.goto(ladderUrl);
+            const joinLadder = await expectOGSClickableByName(page, /Join Ladder/);
+            const ladderId = ladderUrl.match(/\/ladder\/(\d+)/)?.[1];
+            await actAndWaitForResponse(
+                page,
+                { method: "POST", path: `/api/v1/ladders/${ladderId}/players` },
+                () => joinLadder.click(),
+            );
+            await expect(page.getByRole("button", { name: /Drop out from ladder/ })).toBeVisible({
+                timeout: 15000,
+            });
+            log(`${username} joined the ladder at rank ${i + 1}`);
+            if (i >= 1 && i <= 3) {
+                await page.context().close();
+            }
+        }
+
+        // 4. P6 challenges P1, P2 and P3 - three open games, at the cap.
+        //    challengePlayer navigates first, so each challenge starts from a fresh
+        //    page: creating one invalidates the ladder list behind the popover.
+        for (const username of ladderPlayers.slice(0, 3)) {
+            await challengePlayer(p6Page, ladderUrl, username);
+            log(`P6 challenged ${username}`);
+        }
+
+        // P4 is now blocked by the cap.
+        await p6Page.goto(ladderUrl);
+        await openRowPopover(p6Page, ladderPlayers[3]);
+        await expect(p6Page.getByText("Already playing 3 games you've initiated")).toBeVisible({
+            timeout: 15000,
+        });
+        log("P6 is at the cap: P4 reports 0x005");
+
+        // 5. P5 goes on vacation, having never been challenged.
+        await setVacation(p5Page, true);
+        log("P5 is on vacation");
+
+        await p6Page.goto(ladderUrl);
+        await openRowPopover(p6Page, ladderPlayers[4]);
+        await expect(p6Page.getByText("Player is on vacation")).toBeVisible({ timeout: 15000 });
+        log("P5 reports 0x009 - a player on vacation cannot be challenged");
+
+        // 6. P1 goes on vacation: P6's discounted count drops to two, freeing a slot.
+        await setVacation(p1Page, true);
+        log("P1 is on vacation");
+
+        await p6Page.goto(ladderUrl);
+        await openRowPopover(p6Page, ladderPlayers[3]);
+        const challengeP4 = await expectOGSClickableByName(p6Page, /^Challenge$/);
+        await expect(challengeP4).toBeVisible();
+        log("P4 is challengeable again - the vacation discount applied");
+
+        // 7. P6 challenges P4 - four open games, three counting.
+        await challengePlayer(p6Page, ladderUrl, ladderPlayers[3]);
+        log("P6 challenged P4");
+
+        // 8. P5 comes back: the vacation reason gives way to the cap reason. P6
+        //    holds four open games and P1 is still away, so three of them count.
+        await setVacation(p5Page, false);
+        await p6Page.goto(ladderUrl);
+        await openRowPopover(p6Page, ladderPlayers[4]);
+        await expect(p6Page.getByText("Already playing 3 games you've initiated")).toBeVisible({
+            timeout: 15000,
+        });
+        await expect(p6Page.getByText("Player is on vacation")).toHaveCount(0);
+        log("P5 is back: reports the cap with three counting, no longer 0x009");
+
+        // 9. P1 comes back: P6 is at four counting games, over the cap. P5 is the
+        //    only player P6 has not challenged, and is no longer on vacation, so P5
+        //    is the row that must now report the cap.
+        await setVacation(p1Page, false);
+        await p6Page.goto(ladderUrl);
+        await openRowPopover(p6Page, ladderPlayers[4]);
+        await expect(p6Page.getByText("Already playing 4 games you've initiated")).toBeVisible({
+            timeout: 15000,
+        });
+        log("P6 is over the cap with everyone back - no games were cancelled");
+
+        log("=== Ladder Vacation Challenge Limit Test Complete ===");
+    } catch (error) {
+        testFailed = true;
+        throw error;
+    } finally {
+        const cleanupErrors: unknown[] = [];
+        for (const page of [p1Page, p5Page]) {
+            try {
+                await ensureVacationOff(page);
+            } catch (error) {
+                cleanupErrors.push(error);
+            }
+        }
+
+        if (groupUrl) {
+            try {
+                await deleteGroup(p1Page, groupUrl);
+                const groupId = new URL(groupUrl).pathname.split("/").pop();
+                const group = await p1Page.request.get(`/api/v1/groups/${groupId}`);
+                expect(group.status()).toBe(404);
+                if (ladderUrl) {
+                    const ladderId = ladderUrl.match(/\/ladder\/(\d+)/)?.[1];
+                    const ladder = await p1Page.request.get(`/api/v1/ladders/${ladderId}`);
+                    expect(ladder.status()).toBe(404);
+                }
+            } catch (error) {
+                cleanupErrors.push(error);
+            }
+        }
+
+        if (cleanupErrors.length) {
+            const details = cleanupErrors.map(String).join("\n");
+            await testInfo.attach("ladder-cleanup-errors", {
+                body: details,
+                contentType: "text/plain",
+            });
+            if (!testFailed) {
+                throw new Error(`Ladder fixture cleanup failed:\n${details}`);
+            }
+        }
+    }
+};

@@ -1,0 +1,177 @@
+.PlayControls {
+    flex-grow: 0;
+    flex-shrink: 0;
+    display: block;
+    user-select: none;
+    display: flex;
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    max-width: 100dvw;
+
+    /* Every child here is conditional, so the whole block can end up with
+     * nothing to show. Drop the padding then, otherwise the empty control
+     * area leaves a visible gap between the player cards and the chat. */
+    &:empty {
+        padding: 0;
+    }
+
+    > div {
+        width: 100%;
+    }
+
+    .annulled-indicator {
+        color: red;
+        text-align: center;
+        position: relative;
+        cursor: help;
+
+        .fa {
+            color: var(--shade1);
+            margin-left: 0.5rem;
+        }
+
+        .annulment-reason {
+            display: none;
+        }
+    }
+
+    .annulled-indicator:hover {
+        .annulment-reason {
+            display: inline-block;
+            position: absolute;
+            top: 1.1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: var(--shade4);
+            border: 1px solid;
+            border-color: var(--shade3);
+            z-index: var(--z-popover);
+            color: var(--fg);
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            max-width: 90dvw;
+            text-align: justify;
+        }
+    }
+
+    .analyze-mode-buttons {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-around;
+        align-items: center;
+        margin-top: 5px;
+        margin-bottom: 5px;
+
+        button {
+            background-color: var(--success);
+            border-color: var(--success-dark);
+        }
+
+        button:hover {
+            background-color: var(--success-light);
+            border-color: var(--success-darker);
+        }
+    }
+
+    .pause-controls {
+        text-align: center;
+    }
+
+    .stone-removal-controls {
+        text-align: center;
+
+        .explanation {
+            padding: 1rem;
+            font-style: italic;
+        }
+    }
+
+    .undo-requested-message {
+        display: block;
+    }
+
+    .stalling-score-estimate {
+        margin: 0.5rem;
+        font-size: 1rem;
+        font-style: italic;
+        text-wrap: balance;
+        text-wrap-mode: balance;
+    }
+
+    .needs-sealing {
+        margin: 1rem;
+        padding: 1rem;
+        font-weight: bold;
+        border-radius: 0.2rem;
+        font-size: 1.1rem;
+        background-color: var(--warning-bg);
+        color: var(--warning-fg);
+
+        .needs-sealing-coordinates {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 1rem;
+            font-weight: bold;
+            background-color: var(--warning-bg);
+            color: var(--warning-fg);
+
+            .needs-sealing-box {
+                flex-grow: 0;
+                flex-shrink: 0;
+                flex-basis: 1rem;
+                display: inline-block;
+                width: 1rem;
+                height: 1rem;
+                background-color: red;
+                border: 0.2rem solid #e079ce;
+                margin-right: 0.5rem;
+            }
+
+            div {
+                flex: 1;
+            }
+        }
+    }
+
+    .score-square {
+        display: inline-block;
+        width: 0.7rem;
+        height: 0.7rem;
+        border: 0.3rem solid #f00;
+
+        &.black {
+            background-color: black;
+            border-color: #555;
+        }
+
+        &.white {
+            background-color: white;
+            border-color: #aaa;
+        }
+    }
+
+    /* Match the move tree container's 0.5em margin so the comments box lines
+     * up with it and fills the remaining width of the sidebar. */
+    .move-comments {
+        margin: 0 0.5em;
+
+        textarea {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+        }
+    }
+
+    .btn-group {
+        vertical-align: middle;
+        display: inline-flex;
+    }
+
+    .removal {
+        color: red;
+    }
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,140 +16,222 @@
  */
 
 import * as React from "react";
-import {Link, browserHistory} from "react-router";
-import * as data from "data";
-import {_} from "translate";
-import {Card} from "material";
-import {errorAlerter} from "misc";
-import {LineText} from "misc-ui";
-import {OGSComponent} from "components";
-import {post, get} from "requests";
-import {get_ebi} from "SignIn";
+import * as data from "@/lib/data";
+import { Link } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { _, pgettext } from "@/lib/translate";
+import { Card } from "@/components/material";
+import { errorAlerter } from "@/lib/misc";
+import { post } from "@/lib/requests";
+import { valid_next_url } from "@/lib/url_validation";
+import { get_ebi } from "@/views/SignIn";
+import { useUser } from "@/lib/hooks";
+import cached from "@/lib/cached";
+import { get_browser_timezone } from "@/lib/browser_timezone";
 
-declare var swal;
+import { SocialLoginButtons } from "@/components/SocialLoginButtons";
+import { LoadingButton } from "@/components/LoadingButton";
+import "./Register.css";
 
-export class Register extends OGSComponent<{}, any> {
-    refs: {
-        username: any;
-        email: any;
-        password: any;
+export function Register(): React.ReactElement {
+    const navigate = useNavigate();
+    const user = useUser();
+    const [searchParams] = useSearchParams();
+    const ref_username = React.useRef<HTMLInputElement>(null);
+    const ref_email = React.useRef<HTMLInputElement | null>(null);
+    const ref_password = React.useRef<HTMLInputElement | null>(null);
+    const [error, setError] = React.useState<string>();
+    const [submitLoading, setSubmitLoading] = React.useState(false);
+
+    // Get the next URL from query params (for OAuth flow)
+    const nextParam = valid_next_url(searchParams.get("next"));
+    const socialNextUrl = nextParam || "/wait-for-user#" + window.location.hash.substring(1);
+
+    if (!user.anonymous) {
+        void navigate("/");
+    }
+
+    const onSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+        event.preventDefault();
+        if (submitLoading) {
+            return;
+        }
+        const actually_register = async () => {
+            return post("/api/v0/register", {
+                username: ref_username.current?.value.trim(),
+                password: ref_password.current?.value,
+                email: ref_email.current?.value.trim(),
+                ebi: get_ebi(),
+                timezone: get_browser_timezone(),
+            })
+                .then((config) => {
+                    data.set(cached.config, config);
+
+                    // Note: this causes a page reload, and the new user is set up from scratch in the process
+                    // Check for ?next= query parameter first (used by OAuth authorization flow)
+                    if (nextParam) {
+                        // Redirect to the ?next= URL (for OAuth authorization flow)
+                        window.location.href = nextParam;
+                    } else if (window.location.hash && window.location.hash[1] === "/") {
+                        window.location.pathname = window.location.hash.substring(1);
+                    } else {
+                        window.location.pathname = "/";
+                    }
+                })
+                .catch((err) => {
+                    if (err.responseJSON && err.responseJSON.error_code === "banned") {
+                        data.set("appeals.banned_user_id", err.responseJSON.banned_user_id);
+                        data.set("appeals.jwt", err.responseJSON.jwt);
+                        data.set("appeals.ban-reason", err.responseJSON.ban_reason);
+                        window.location.pathname = "/appeal";
+                        return;
+                    }
+
+                    if (err.responseJSON) {
+                        console.log(err.responseJSON);
+                        if (err.responseJSON.firewall_action === "COLLECT_VPN_INFORMATION") {
+                            window.location.pathname = "/blocked-vpn";
+                        } else {
+                            errorAlerter(err);
+                        }
+                    } else {
+                        errorAlerter(err);
+                    }
+                });
+        };
+
+        if (ref_username.current?.value.trim() === "" || !validateUsername()) {
+            ref_username.current?.focus();
+            return;
+        }
+
+        if (ref_password.current?.value.trim() === "") {
+            ref_password.current?.focus();
+            return;
+        }
+
+        if (
+            (document.activeElement === ref_username.current ||
+                document.activeElement === ref_password.current) &&
+            ref_email.current?.value.trim() === ""
+        ) {
+            ref_email.current.focus();
+            return;
+        }
+
+        try {
+            setSubmitLoading(true);
+            await actually_register();
+        } finally {
+            setSubmitLoading(false);
+        }
+        return;
     };
 
-    constructor(props) {
-        super(props);
-        this.state = { };
-    }
-
-    register = (event) => {
-        let actually_register = () => {
-            console.log("Should be logging in");
-
-            post("/api/v0/register", {
-                "username": this.refs.username.value.trim(),
-                "password": this.refs.password.value,
-                "email": this.refs.email.value.trim(),
-                "ebi": get_ebi()
-            }).then((config) => {
-                data.set("config", config);
-                console.log("Logged in!");
-                console.info(config);
-                browserHistory.replace("/");
-            }).catch(errorAlerter);
-        };
-
-        let focus_empty = () => {
-            if (this.refs.username.value.trim() === "" || !this.validateUsername()) {
-                this.refs.username.focus();
-                return true;
-            }
-
-            if (this.refs.username.value.trim() === "") {
-                this.refs.username.focus();
-                return true;
-            }
-
-
-            if (this.refs.password.value.trim() === "") {
-                this.refs.password.focus();
-                return true;
-            }
-            if (this.refs.email.value.trim() === "") {
-                this.refs.email.focus();
-                return true;
-            }
-
-            return false;
-        };
-
-        if (event.type === "click") {
-            event.preventDefault();
-            if (focus_empty()) {
-                return false;
-            }
-            actually_register();
-        }
-        if (event.type === "keypress") {
-            if (event.charCode === 13) {
-                event.preventDefault();
-                if (focus_empty()) {
-                    return false;
-                }
-                actually_register();
-            }
-        }
-
-
-        if (event.type === "click" || event.charCode === 13) {
+    const validateUsername = () => {
+        if (!ref_username.current) {
             return false;
         }
-    }
 
-    validateUsername = (ev?) => {
-        if (/@/.test(this.refs.username.value)) {
-            $(this.refs.username).addClass("validation-error");
-            this.setState({"error": _("Your username will be publically visible, please do not use your email address here.")});
-            this.refs.username.focus();
+        if (/@/.test(ref_username.current.value)) {
+            ref_username.current.classList.add("validation-error");
+            setError(
+                _(
+                    "Your username will be publicly visible, please do not use your email address here.",
+                ),
+            );
+            ref_username.current.focus();
             return false;
         } else {
-            if ($(this.refs.username).hasClass("validation-error")) {
-                $(this.refs.username).removeClass("validation-error");
-                this.setState({"error": null});
+            if (ref_username.current.classList.contains("validation-error")) {
+                ref_username.current.classList.remove("validation-error");
+                setError(undefined);
             }
         }
         return true;
-    }
+    };
 
-
-    render() {
-        return (
+    return (
         <div id="Register">
-            <Card>
-            <h2>{_("Welcome new player!")}</h2>
-                <form name="login" autoComplete="on">
-                    <input className="boxed" autoFocus ref="username" name="username" onKeyPress={this.register} onChange={this.validateUsername} placeholder={_("Username") /* translators: New account registration */} />
-                    {this.state.error && <div className="error-message">{this.state.error}</div>}
-                    <input className="boxed" ref="password" type="password" name="password" onKeyPress={this.register} placeholder={_("Password") /* translators: New account registration */} />
-                    <input className="boxed" ref="email" type="email" name="email" onKeyPress={this.register} placeholder={_("Email") /* translators: New account registration */} />
-                    <div style={{textAlign: "right", marginBottom: "1.0rem"}}>
-                        <button className="primary" onClick={this.register}>
-                            <i className="fa fa-sign-in"/> {_("Sign up")}
-                        </button>
-                    </div>
-                </form>
+            <div>
+                <Card>
+                    <h2>{_("Welcome new player!")}</h2>
+                    <form name="login" autoComplete="on" onSubmit={onSubmit}>
+                        <label htmlFor="username">
+                            {_("Username") /* translators: New account registration */}
+                        </label>
+                        <input
+                            className="boxed"
+                            id="username"
+                            autoFocus
+                            ref={ref_username}
+                            name="username"
+                            onChange={validateUsername}
+                        />
+                        {error && <div className="error-message">{error}</div>}
+                        <label htmlFor="password">
+                            {_("Password") /* translators: New account registration */}
+                        </label>
+                        <input
+                            className="boxed"
+                            id="password"
+                            ref={ref_password}
+                            type="password"
+                            name="password"
+                        />
+                        <label htmlFor="email">
+                            {_("Email (optional)") /* translators: New account registration */}
+                        </label>
+                        <input
+                            className="boxed"
+                            id="email"
+                            ref={ref_email}
+                            type="email"
+                            name="email"
+                        />
+                        <div style={{ textAlign: "right", marginBottom: "1.0rem" }}>
+                            <LoadingButton
+                                type="submit"
+                                className="primary"
+                                loading={submitLoading}
+                                icon={<i className="fa fa-sign-in" />}
+                            >
+                                {pgettext(
+                                    "This is the button they press to register with OGS",
+                                    "Register",
+                                )}
+                            </LoadingButton>
+                        </div>
+                    </form>
 
-                <div className="social-buttons">
-                    <LineText>{
-                        _("or sign in with") /* translators: username or password, or sign in with social authentication */
-                    }</LineText>
-                    <a className="zocial google icon"
-                        href="/login/google-oauth2/" target="_self">Google</a>
-                    <a className="zocial facebook icon"
-                        href="/login/facebook/" target="_self">Facebook</a>
-                    <a className="zocial twitter icon"
-                        href="/login/twitter/" target="_self">Twitter</a>
+                    <hr />
+                    <span>
+                        {
+                            _(
+                                "or sign in using another account:",
+                            ) /* translators: username or password, or sign in with social authentication */
+                        }
+                    </span>
+
+                    <SocialLoginButtons next_url={socialNextUrl} />
+                </Card>
+
+                <div className="sign-in-option">
+                    <h3>{_("Already have an account?")} </h3>
+                    <div>
+                        <Link
+                            to={
+                                nextParam
+                                    ? `/sign-in?next=${encodeURIComponent(nextParam)}`
+                                    : "/sign-in"
+                            }
+                            className="btn primary"
+                        >
+                            <b>{_("Sign-in here!")}</b>
+                        </Link>
+                    </div>
                 </div>
-            </Card>
+            </div>
         </div>
-        );
-    }
+    );
 }

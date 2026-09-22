@@ -1,0 +1,96 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+.ChallengesList {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-wrap: wrap;
+
+    h2 {
+        margin-bottom: 0.5rem;
+    }
+
+    .challenge-counter {
+        cursor: pointer;
+        position: absolute;
+        right: 0.6rem;
+        opacity: 0.8;
+        user-select: none;
+    }
+
+    .Challenge {
+        width: 19rem;
+        min-height: 19rem;
+        max-width: 100dvw;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+
+        .icon-name {
+            flex-grow: 1;
+            display: flex;
+
+            .name {
+                flex-grow: 1;
+                min-width: 0;
+            }
+
+            .PlayerIcon {
+                flex: 0;
+                margin-right: 0.5rem;
+                margin-bottom: 0.5rem;
+            }
+
+            h4 {
+                margin: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+        }
+
+        .challenge-actions {
+            display: flex;
+            flex-direction: row;
+            gap: 0.5rem;
+            width: 100%;
+            justify-content: space-between;
+
+            .accept-button,
+            .decline-button {
+                display: flex;
+                align-items: center;
+                gap: 0.3rem;
+                padding: 0.3rem 0.75rem;
+                border-radius: 0.25rem;
+                border: 1px solid var(--shade3);
+                cursor: pointer;
+                font-size: 0.85rem;
+            }
+
+            .accept-button {
+                background-color: var(--primary);
+                color: white;
+                border-color: var(--primary);
+            }
+
+            .decline-button {
+                background-color: transparent;
+                color: var(--fg);
+            }
+        }
+    }
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,383 +16,403 @@
  */
 
 import * as React from "react";
-import {browserHistory} from "react-router";
-import {rankString, shouldOpenNewTab, errorLogger} from "misc";
-import {close_all_popovers, popover} from "popover";
-import {PlayerDetails} from "./PlayerDetails";
-import {Flag} from "Flag";
-import {PlayerIcon} from "PlayerIcon";
-import player_cache from "player_cache";
-import online_status from "online_status";
+import { browserHistory } from "@/lib/ogsHistory";
+//import { useNavigate } from "react-router-dom";
+import * as data from "@/lib/data";
+import { shouldOpenNewTab, errorLogger, unicodeFilter } from "@/lib/misc";
+import { rankString, getUserRating, PROVISIONAL_RATING_CUTOFF } from "@/lib/rank_utils";
+import { close_all_popovers, popover } from "@/lib/popover";
+import { close_friend_list } from "@/components/FriendList/close_friend_list";
+import { PlayerDetails } from "./PlayerDetails";
+import { openPlayerNotesModal } from "@/components/PlayerNotesModal";
+import { Flag } from "@/components/Flag";
+import { PlayerIcon } from "@/components/PlayerIcon";
+import * as player_cache from "@/lib/player_cache";
+import * as preferences from "@/lib/preferences";
+import online_status from "@/lib/online_status";
+import { ReportContext } from "@/contexts/ReportContext";
+import "./Player.css";
 
-interface PlayerProperties {
-    // id?: any,
-    // user?: any,
-    // callback?: ()=>any,
+/* There are cases where what we are handed is some odd looking dirty data. We
+ * should probably start warning about remaining uses of these fields and then
+ * clean/remove them when they pop up. */
+
+export interface PlayerObjectType {
+    id?: number;
+    player_id?: number; // alias for id, should be removed but here for backwards compatibility
+
+    professional?: boolean;
+    pro?: boolean;
+
+    rank?: number;
+    ranking?: number;
+
+    name?: string;
+    username?: string;
+
+    anonymous?: boolean;
+
+    country?: string;
+    ui_class?: string;
+}
+
+export interface PlayerProperties {
     icon?: boolean;
     iconSize?: number;
-    user: any;
+    user?: number | PlayerObjectType;
+    historical?: PlayerObjectType;
     flag?: boolean;
     rank?: boolean;
     flare?: boolean;
     online?: boolean;
     nolink?: boolean;
-    nodetails?: boolean; /* don't open the detials box, instead just open player page */
+    fakelink?: boolean;
+    nodetails?: boolean /* don't open the details box, instead just open player page */;
+    nochallenge?: boolean /* don't show the challenge button in the details box */;
+    noextracontrols?: boolean /* Disable extra controls */;
+    shownotesindicator?: boolean /* add the notes icon if the player has notes */;
     disableCacheUpdate?: boolean;
+    forceShowRank?: boolean;
+    showAsBanned?: boolean; // client can request us to render as banned (we can't find out here)
+    tabIndex?: number; // control tab order for accessibility
+    gameId?: number; // When provided, enables tagging for moderators
 }
 
+export function Player(props: PlayerProperties): React.ReactElement {
+    const user = data.get("user");
+    const player_id: number =
+        (typeof props.user !== "object" ? props.user : props.user?.id || props.user?.player_id) ||
+        0;
+    const historical = props.historical;
+    //const navigate = useNavigate();
 
-export class Player extends React.PureComponent<PlayerProperties, any> {
-    refs: {
-        elt
-    };
+    const [is_online, set_is_online] = React.useState<boolean>(false);
+    const [player, set_player] = React.useState<PlayerObjectType | null>(
+        typeof props.user === "object" ? props.user : null,
+    );
+    const [has_notes, set_has_notes] = React.useState<boolean | null>(
+        (player?.id && user?.id && !!data.get(`player-notes.${user?.id}.${player?.id}`)) || false,
+    );
 
-    online_subscription_user_id = null;
+    const elt_ref = React.useRef<HTMLSpanElement | HTMLAnchorElement | undefined>(undefined);
+    const player_id_ref = React.useRef<number>(player_id);
+    const username_ref = React.useRef<string | null | undefined>(null);
 
-    constructor(props) {
-        super(props);
-        this.state = {
-            is_online: false,
-            user: null,
-        };
-        if (typeof(props.user) === "object") {
-            this.state.user = props.user;
-        }
-    }
+    player_id_ref.current = player_id;
+    username_ref.current = typeof props.user !== "object" ? null : props.user?.username;
 
-    componentDidMount() {{{
-        if (this.state.user) {
-            if (!this.props.disableCacheUpdate) {
-                player_cache.update(this.props.user);
+    const base = player || historical;
+    const combined = base ? Object.assign({}, base, historical ? historical : {}) : null;
+
+    const viewReportContext = React.useContext(ReportContext);
+
+    React.useEffect(() => {
+        if (!props.disableCacheUpdate) {
+            if (player?.id && player.id > 0) {
+                player_cache.update(player);
             }
-        }
-        if (typeof(this.props.user) === "number") {
-            player_cache.fetch(this.props.user, ["username"]).then((user) => {
-                this.setState({user: user});
-            }).catch(errorLogger);
-        }
 
-        this.syncUpdateOnline(this.props.user);
-    }}}
-
-    updateOnline = (_player_id, tf) => {{{
-        this.setState({is_online: tf});
-    }}}
-
-    syncUpdateOnline(user_or_id) {{{
-        let id = typeof(user_or_id) === "number" ? user_or_id : ((typeof(user_or_id) === "object" && user_or_id) ? user_or_id.id : null);
-
-        if (!this.props.online || id !== this.online_subscription_user_id) {
-            if (this.online_subscription_user_id) {
-                this.online_subscription_user_id = null;
-                online_status.unsubscribe(this.online_subscription_user_id, this.updateOnline);
-            }
-        }
-        if (this.props.online && id && id !== this.online_subscription_user_id) {
-            this.online_subscription_user_id = id;
-            online_status.subscribe(this.online_subscription_user_id, this.updateOnline);
-        }
-
-    }}}
-
-
-
-    componentWillReceiveProps(new_props) {{{
-        if (typeof(new_props.user) === "object") {
-            player_cache.update(new_props.user);
-            this.setState({user: new_props.user});
-        }
-
-        if (typeof(new_props.user) === "number") {
-            player_cache.fetch(new_props.user, ["username", "ranking", "country"]).then((user) => {
-                this.setState({user: user});
-            }).catch(errorLogger);
-        }
-
-        this.syncUpdateOnline(new_props.user);
-    }}}
-    componentDidUpdate() {{{
-        this.syncUpdateOnline(this.props.user);
-    }}}
-    componentWillUnmount() {{{
-        this.syncUpdateOnline(null);
-    }}}
-
-
-    render() {
-        if (!this.state.user) {
-            if (typeof(this.props.user) === "number") {
-                return <span className="Player" data-player-id={0}>...</span>;
-            } else {
-                return <span className="Player" data-player-id={0}>[NULL USER]</span>;
+            const username = typeof props.user !== "object" ? null : props.user?.username;
+            if (player_id && player_id > 0) {
+                player_cache
+                    .fetch(player_id, ["username", "ui_class", "ranking", "pro"])
+                    .then((player) => {
+                        if (player_id_ref.current === player?.id) {
+                            set_player(player);
+                        }
+                    })
+                    .catch((err: any) => {
+                        if (player_id_ref.current === player?.id) {
+                            set_player({
+                                id: player_id,
+                                username: "?player" + player_id + "?",
+                                ui_class: "provisional",
+                                pro: false,
+                            });
+                        }
+                        errorLogger(err);
+                    });
+            } else if (player_id && player_id <= 0) {
+                // do nothing
+            } else if (username && username !== "...") {
+                player_cache
+                    .fetch_by_username(username, ["username", "ui_class", "ranking", "pro"])
+                    .then((player) => {
+                        if (username_ref.current === player?.username) {
+                            set_player(player);
+                        }
+                    })
+                    .catch((err: any) => {
+                        if (username_ref.current === player?.username) {
+                            set_player({
+                                id: 0,
+                                username: username,
+                                ui_class: "provisional",
+                                pro: false,
+                            });
+                        }
+                        errorLogger(err);
+                    });
             }
         }
 
-        let props = this.props;
-        let player = this.state.user;
-        let player_id = player.id || player.player_id;
-        let nolink = !!this.props.nolink;
-
-
-        let main_attrs: any = {
-            "className": "Player",
-            "data-player-id": player_id,
+        const set_online = (player_id: number, tf: boolean) => {
+            set_is_online(tf);
         };
 
-        if (props.icon) {
-            main_attrs.className += " Player-with-icon";
-        }
-
-        if (player.ui_class) {
-            main_attrs.className += " " + player.ui_class;
-        }
-
-        if (player_id < 0) {
-            main_attrs.className += " guest";
-        }
-
-        if (!player_id || nolink) {
-            main_attrs.className += " nolink";
-        }
-
-        if (this.props.nodetails) {
-            main_attrs.className += " nodetails";
-        }
-
-        if (this.props.rank !== false) {
-            if ("rank" in player && !("ranking" in player)) {
-                player.ranking = player.rank;
-            }
-            if (player.ranking > 0) {
-                let suffix = "";
-                if (player.ui_class && player.ui_class.indexOf("provisional") >= 0) {
-                    suffix += "?";
-                }
-                if (player.ui_class && player.ui_class.indexOf("timeout") >= 0) {
-                    suffix += "T";
-                }
-                main_attrs["data-rank"] = " [" + rankString(player) + suffix + "]";
-            }
-        }
-
-        if (props.flare) {
-            main_attrs.className += " with-flare";
-        }
-
+        /* Online status */
         if (props.online) {
-            main_attrs.className += this.state.is_online ? " online" : " offline";
+            online_status.subscribe(player_id, set_online);
         }
 
+        /* Has notes */
+        const updateHasNotes = () => {
+            const user = data.get("config.user");
+            const tf = !!data.get(`player-notes.${user.id}.${player_id}`);
+            if (tf !== has_notes) {
+                set_has_notes(tf);
+            }
+        };
 
-        return (
-            <span ref="elt" {...main_attrs}>
-                {(props.icon || null) && <PlayerIcon user={player} size={props.iconSize || 16}/>}
-                {(props.flag || null) && <Flag country={player.country}/>}
-                {player.username || player.name}
-            </span>
-        );
-    }
-}
+        if (props.shownotesindicator) {
+            data.watch(`player-notes.${user.id}.${player_id}`, updateHasNotes);
+        }
 
+        return () => {
+            if (props.shownotesindicator) {
+                if (user?.id && player?.id) {
+                    data.unwatch(`player-notes.${user.id}.${player.id}`, updateHasNotes);
+                }
+            }
+            if (props.online) {
+                online_status.subscribe(player_id, set_online);
+            }
+        };
+    }, [player_id, typeof props.user === "object" && props.user?.username]);
 
+    const display_details = (event: React.MouseEvent) => {
+        if (!player) {
+            return;
+        }
+        const _player_id = player.id || player.player_id;
 
-$(document).on("mousedown", ".Player", (ev) => {
-    try {
-        if ($(ev.target).hasClass("nolink")) {
+        if (props.nolink || player.anonymous || !_player_id || _player_id < 0) {
             return;
         }
 
-
-        ev.stopPropagation();
-
-        //console.log('Player clicked', ev.target);
-
-        let elt = $(ev.target);
-        let player_id: any = elt.attr("data-player-id");
-
-        let failsafe = 5;
-        while (elt && !player_id && --failsafe) {
-            elt = elt.parent();
-            player_id = elt.attr("data-player-id");
-        }
-        if (!player_id) {
-            console.warn("No player id for this player name element", ev.target, $(ev.target).parent()[0]);
-            return;
-        }
-        player_id = parseInt(player_id);
-        if (player_id < 0) {
+        if (!props.fakelink && shouldOpenNewTab(event)) {
+            /* let browser deal with opening the window so we don't get popup warnings */
             return;
         }
 
+        event.stopPropagation();
+        event.preventDefault();
 
-        if (shouldOpenNewTab(ev)) {
+        const player_id = (player.id || player.player_id) as number;
+        if (shouldOpenNewTab(event)) {
             let uri = `/player/${player_id}`;
-            let player = player_cache.lookup(parseInt(player_id));
+            const player = player_cache.lookup(player_id);
             if (player) {
-                uri += "/" + encodeURIComponent(player.username);
+                uri += "/" + encodeURIComponent(unicodeFilter(player?.username || ""));
             }
-            window.open(uri , "_blank");
+            window.open(uri, "_blank");
+        } else if (props.nodetails) {
+            close_all_popovers();
+            close_friend_list();
+            browserHistory.push(`/player/${player_id}/`);
+            //void navigate(`/player/${player_id}/`);
+            return;
         } else {
-            if ($(ev.target).hasClass("nodetails")) {
-                close_all_popovers();
-                browserHistory.push(`/player/${player_id}/`);
-                return;
+            let chat_id: string | null = null;
+            try {
+                let cur = elt_ref.current as HTMLElement;
+
+                while (cur && cur.nodeName !== "BODY") {
+                    chat_id = cur.getAttribute("data-chat-id") || null;
+                    if (chat_id) {
+                        break;
+                    }
+                    cur = cur.parentElement as HTMLElement;
+                }
+            } catch (e) {
+                console.error(e);
             }
-
-
-            let offset = elt.offset();
 
             popover({
-                elt: (<PlayerDetails playerId={parseInt(player_id)} />),
-                at: {x: offset.left, y: offset.top + elt.height()},
+                elt: (
+                    <PlayerDetails
+                        playerId={player_id}
+                        gameId={props.gameId}
+                        noextracontrols={props.noextracontrols}
+                        nochallenge={props.nochallenge}
+                        chatId={chat_id || undefined}
+                    />
+                ),
+                below: elt_ref.current,
                 minWidth: 240,
                 minHeight: 250,
             });
         }
-    } catch (e) {
-        console.error(e);
-    }
-});
-
-
-let __html_player_link_id = 0;
-let player_link_data = {};
-let player_link_last_id = 0;
-export function makeHTMLPlayerLink(field_order, player, link_target) { /* {{{ */
-    let id = "player-link-" + (++__html_player_link_id);
-    let obj = makePlayerLink(field_order, player, link_target);
-    if (!player.nolink && !player.no_link) {
-        setTimeout(() => { $("#" + id).append(obj); }, 100);
-    }
-    return "<span id='" + id + "'></span>";
-} /* }}} */
-export function setPlayerLinkData(user_id, player, extra_arguments) { /* {{{ */
-    let id = ++player_link_last_id;
-
-    player_link_data[id] = {
-        "user_id": user_id,
-        "player": player,
-        "extra_arguments": extra_arguments
     };
-    return id;
-} /* }}} */
-export function makePlayerLink(field_order, player,  extra_arguments?) { /* {{{ */
-    let ret;
 
-    try {
-        player_cache.update(player);
-        let user_id = ("user_id" in player ? player.user_id : ("id" in player ? player.id : 0));
-        player.user_id = user_id;
+    /************/
+    /** Render **/
+    /************/
 
-        ret = $(`<span class='Player' data-player-id='${user_id}'>`).addClass("player-name");
-
-        if ("rank" in player && !("ranking" in player)) {
-            player.ranking = player.rank;
+    if (!combined) {
+        if (typeof props.user === "number") {
+            return (
+                <span className="Player" data-player-id={0}>
+                    ...
+                </span>
+            );
+        } else {
+            return (
+                <span className="Player" data-player-id={0}>
+                    [NULL USER]
+                </span>
+            );
         }
-
-        let provisional = false;
-        let timeout = false;
-        if ("ui_class" in player) {
-            provisional = player.ui_class.indexOf("provisional") >= 0;
-            timeout = player.ui_class.indexOf("timeout") >= 0;
-
-            if (field_order.indexOf("ui_class_dot") >= 0) {
-                let classes = player["ui_class"].split(/\s+/);
-                for (let i = 0; i < classes.length; ++i) {
-                    classes[i] += "-dot";
-                }
-                ret.addClass(classes.join(" "));
-            } else {
-                ret.addClass(player["ui_class"]);
-            }
-        }
-
-        let rank_suffix = "";
-        if (provisional) {
-            rank_suffix += "?";
-        }
-        if (timeout) {
-            rank_suffix += "T";
-        }
-
-        let nolink = ((player.nolink ? 1 : 0) || (player.no_link ? 1 : 0));
-        let flag = false;
-        let bigflag = false;
-        let img;
-
-        for (let  i = 0; i < field_order.length; ++i) {
-            let field = field_order[i];
-            let res = $("<span>");
-
-            if (field === "name") {
-                res.text(player.username);
-            }
-            else if (field === "online") {
-                throw new Error("online no longer supported in makePlayerLink");
-            }
-            else if (field === "icon") {
-                res.append(img = $("<img>").attr("src", "icon" in player ? player["icon"] : player["icon-url"]).addClass("user_icon").addClass(player["icon-size"]));
-            }
-            else if (field === "rank") {
-                if (player.ranking > -100) {
-                     res.text(" [" + rankString(player) + rank_suffix + "]");
-                }
-                res.addClass("rank");
-            }
-            else if (field === "smallrank") {
-                if (player.ranking > -100) {
-                     res.text(" [" + rankString(player) + rank_suffix + "]");
-                }
-                res.addClass("smallrank");
-            }
-            else if (field === "plain-rank" || field === "plainrank") {
-                res.text(rankString(player));
-            }
-            else if (field === "flag") {
-                flag = true;
-            }
-            else if (field === "bigflag") {
-                bigflag = true;
-            }
-            else if (field === "nolink" || field === "no_link") { nolink = 1; }
-            else if (field === "small" || field === "medium" || field === "large" || field === "tiny") {
-                if (img) {
-                    img.addClass(field);
-                }
-            } else if (field === "ui_class_dot") {
-            } else {
-                console.log("Unknown component in player link: ", field);
-                continue;
-            }
-
-            ret.append(res);
-        }
-
-        if (!nolink) {
-            if (!user_id) {
-                console.error("No user id found in player object", player);
-                console.error(new Error().stack);
-            }
-            ret.addClass("clickable");
-            let id = setPlayerLinkData(user_id, player, extra_arguments);
-            ret.attr("data-player", id);
-        }
-
-
-        if (flag) {
-            ret = $("<span>").append($("<span>").addClass("f16").append($("<span>").addClass("flag " + window["getCountryFlagClass"](player.country)).attr("title", window["getCountryName"](player.country)))).append(ret);
-        }
-        else if (bigflag) {
-            ret = $("<span>").append($("<span>").addClass("f32").append($("<span>").addClass("flag " + window["getCountryFlagClass"](player.country)).attr("title", window["getCountryName"](player.country)))).append(ret);
-        }
-
-    } catch (e) {
-        console.log(e);
-        throw e;
     }
 
+    const is_white_player = viewReportContext?.white_player === player_id;
+    const is_black_player = viewReportContext?.black_player === player_id;
 
-    //console.log(ret);
+    const nolink = !!props.nolink;
+    let rank: React.ReactElement | null = null;
 
-    return ret;
-} /* }}} */
+    const main_attrs: any = {
+        className: "Player",
+        "data-player-id": player_id,
+        "data-ready": !!player, // true when player data has loaded
+    };
+
+    if (props.icon) {
+        main_attrs.className += " Player-with-icon";
+    }
+
+    if (combined.ui_class) {
+        main_attrs.className += " " + combined.ui_class;
+    }
+
+    if (viewReportContext?.reported?.id === player_id) {
+        main_attrs.className += " reported";
+    }
+
+    if (viewReportContext?.reporter?.id === player_id) {
+        main_attrs.className += " reporter";
+    }
+
+    if (player_id < 0) {
+        main_attrs.className += " guest";
+    }
+
+    if (!player_id || nolink) {
+        main_attrs.className += " nolink";
+    }
+
+    if (props.nodetails) {
+        main_attrs.className += " nodetails";
+    }
+
+    if (props.noextracontrols) {
+        main_attrs.className += " noextracontrols";
+    }
+
+    if (is_white_player) {
+        main_attrs.className += " white-player";
+    }
+
+    if (is_black_player) {
+        main_attrs.className += " black-player";
+    }
+
+    if (props.showAsBanned) {
+        main_attrs.className += " suspended-player";
+    }
+
+    if (props.rank !== false) {
+        const rating = getUserRating(combined, "overall", 0);
+        let rank_text = "E";
+
+        if (combined.pro || combined.professional) {
+            rank_text = rankString(combined);
+        } else if (rating.unset && ((combined.rank || 0) > 0 || (combined.ranking || 0) > 0)) {
+            /* This is to support displaying archived chat lines */
+            rank_text = rankString(combined);
+        } else if (rating.deviation >= PROVISIONAL_RATING_CUTOFF) {
+            rank_text = "?";
+        } else {
+            rank_text = rating.bounded_rank_label;
+        }
+
+        if (!preferences.get("hide-ranks") || props.forceShowRank) {
+            rank = <span className="Player-rank">[{rank_text}]</span>;
+        }
+    }
+
+    if (props.flare) {
+        main_attrs.className += " with-flare";
+    }
+
+    if (props.online) {
+        main_attrs.className += is_online ? " online" : " offline";
+    }
+
+    const username_string = unicodeFilter(combined.username || combined.name || "<error>");
+    let display_username = username_string;
+
+    if (username_string.toLowerCase().startsWith("deleted-")) {
+        display_username = display_username.substring(0, 15) + "...";
+    }
+
+    const username = <span className="Player-username">{display_username}</span>;
+
+    const player_note_indicator =
+        props.shownotesindicator && has_notes ? (
+            <i
+                className={"Player fa fa-clipboard"}
+                onClick={() => openPlayerNotesModal(player_id)}
+            />
+        ) : null;
+
+    if (props.nolink || props.fakelink || !player_id || combined.anonymous || player_id < 0) {
+        return (
+            <span ref={elt_ref} {...main_attrs} onClick={display_details}>
+                {(props.icon || null) && <PlayerIcon user={combined} size={props.iconSize || 16} />}
+                {((props.flag && combined.country) || null) && (
+                    <Flag country={combined.country as string} />
+                )}
+                {username}
+                {rank}
+                {player_note_indicator}
+            </span>
+        );
+    } else {
+        const player_id = combined.id || combined.player_id;
+        const uri = `/player/${player_id}/${encodeURIComponent(username_string)}`;
+
+        return (
+            // if only we could put {...main_attrs} on the span, we could put the styles in .Player.  But router seems to hate that.
+            <span>
+                <a
+                    href={uri}
+                    ref={elt_ref}
+                    {...main_attrs}
+                    onClick={display_details}
+                    tabIndex={props.tabIndex}
+                >
+                    {(props.icon || null) && (
+                        <PlayerIcon user={combined} size={props.iconSize || 16} />
+                    )}
+                    {((props.flag && combined.country) || null) && (
+                        <Flag country={combined.country as string} />
+                    )}
+                    {username}
+                    {rank}
+                </a>
+                {player_note_indicator}
+            </span>
+        );
+    }
+}

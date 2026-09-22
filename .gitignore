@@ -4,18 +4,56 @@ typings
 *.swp
 *.swo
 webpack-stats.json
+analyze.json
+stats.json
 src/components/base
-.vscode
 todo
 yarn-error.log
 deployment-staging-area
-Makefile.production
+.deployment-refs
+Makefile.passwords
+how_to_add_a_new_language.txt
 .DS_Store
 /.alm/
-
-
+package-lock.json
+report.*.json
+neovide_backtraces.log
 
 i18n/data/
 i18n/import/
 i18n/prep-import.js
 npm-debug.log
+.yalc
+yalc.lock
+
+# Specifically intended by claude for non-committed settings
+.claude/settings.local.json
+
+# Scratch space for agent workflows: brainstorming mockups, and per-plan
+# implementation briefs, reports and review diffs. Working notes, not history —
+# what survives is the spec and plan under docs/superpowers/, and the commits.
+.superpowers/
+
+# Coverage directory used by Jest (yarn test --coverage)
+coverage
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/
+/e2e-tests/playwright/
+
+old-*
+i18n/*.tar.gz
+*.old
+.playwright-mcp
+
+# Playwright
+/playwright/.cache/
+/playwright/.auth/
+
+# Fixtures dropped by dev-cdn-intercept.spec.ts if a run is killed mid-test
+/assets/img/__probe_*.bin
+
+graphify-out

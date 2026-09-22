@@ -1,0 +1,192 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+import { interpolate, pgettext } from "@/lib/translate";
+import * as React from "react";
+import * as data from "@/lib/data";
+import { Player } from "@/components/Player";
+import { chat_markup } from "./chat_markup";
+import { ChatDateLine } from "./ChatDateLine";
+import { ChatMessage, TypedChatBody } from "@/lib/chat_manager";
+import { profanity_filter } from "@/lib/profanity_filter";
+
+let name_match_regex = /^loading...$/;
+data.watch("config.user", (user) => {
+    const cleaned_username_regex = user.username.replace(/[\\^$*+.()|[\]{}]/g, "\\$&");
+    name_match_regex = new RegExp(
+        "\\b" +
+            cleaned_username_regex +
+            "\\b" +
+            "|\\bplayer ?" +
+            user.id +
+            "\\b" +
+            "|\\bhttps?:\\/\\/online-go\\.com\\/user\\/view\\/" +
+            user.id +
+            "\\b",
+        "i",
+    );
+});
+
+interface ChatLineInterface {
+    line: ChatMessage;
+    lastLine?: ChatMessage;
+    /** False where the caller renders the date itself, outside the line. It
+     *  separates a run of lines rather than belongs to one. */
+    showDate?: boolean;
+}
+
+export function ChatLine(props: ChatLineInterface): React.ReactElement {
+    const line = props.line;
+    const last_line = props.lastLine;
+    const user = line;
+
+    const sys_body_typed =
+        typeof line.message.m === "object" &&
+        line.message.m !== null &&
+        line.message.m.type === "system"
+            ? line.message.m
+            : null;
+    if (line.system || sys_body_typed) {
+        const sys_body = line.message.m;
+        const sys_text = typeof sys_body === "string" ? sys_body : (sys_body.text ?? "");
+        return <div className="chat-line system">{chat_markup(sys_text)}</div>;
+    }
+
+    const message = line.message;
+    const ts = message.t ? new Date(message.t * 1000) : null;
+    let third_person = false;
+    let body = message.m;
+
+    let body_rendered: React.ReactNode;
+    if (typeof body === "string") {
+        if (body.substr(0, 4) === "/me ") {
+            third_person = body.substr(0, 4) === "/me ";
+            body = body.substr(4);
+        }
+
+        if (/^\/senseis?\s/.test(body)) {
+            body = generateChatSearchLine(
+                "http://senseis.xmp.net/?search=",
+                (/^\/senseis?\s/.exec(body) as string[])[0],
+                body,
+            );
+        }
+
+        if (body.substr(0, 8) === "/google ") {
+            body = generateChatSearchLine("https://www.google.com/#q=", "/google ", body);
+        }
+
+        body_rendered = chat_markup(body);
+    } else {
+        body_rendered = renderTypedBody(body);
+    }
+
+    const mentions = typeof body === "string" && name_match_regex.test(body);
+
+    let timestamp_str = "";
+    if (ts) {
+        const hours = ts.getHours();
+        const minutes = ts.getMinutes();
+
+        timestamp_str =
+            (hours < 10 ? ` ${hours}` : hours.toString()) +
+            ":" +
+            (minutes < 10 ? `0${minutes}` : minutes.toString());
+    }
+
+    return (
+        <div
+            className={
+                (third_person ? "chat-line third-person" : "chat-line") +
+                (user.id === data.get("config.user").id ? " self" : ` chat-user-${user.id}`) +
+                (mentions ? " mentions" : "")
+            }
+            data-chat-id={message.i}
+        >
+            {props.showDate !== false && (
+                <ChatDateLine
+                    timestamp={message.t}
+                    previousTimestamp={last_line?.message.t}
+                    hasPreviousLine={Boolean(last_line)}
+                />
+            )}
+            {ts && <span className="timestamp">[{timestamp_str}]</span>}
+            {(user.id || null) && (
+                <Player user={user} flare rank={false} noextracontrols disableCacheUpdate />
+            )}
+            {third_person ? " " : ": "}
+            <span className="body">{body_rendered}</span>
+        </div>
+    );
+}
+
+function renderTypedBody(body: TypedChatBody): React.ReactNode {
+    switch (body.type) {
+        case "analysis": {
+            const name = body.name ? profanity_filter(body.name) : "";
+            return (
+                <span className="variation">
+                    {interpolate(
+                        pgettext(
+                            "Posted analysis variation, non-interactive label",
+                            "Variation: {{name}}",
+                        ),
+                        { name },
+                    )}
+                </span>
+            );
+        }
+        case "system":
+            return <span>{body.text ?? ""}</span>;
+        default:
+            return (
+                <span>
+                    {pgettext(
+                        "Fallback for an unknown typed chat message body",
+                        "[unknown chat message]",
+                    )}
+                </span>
+            );
+    }
+}
+
+function generateChatSearchLine(urlString: string, command: string, body: string) {
+    let target = "";
+    const bodyString = body.substr(command.length);
+    if (bodyString.split(" ")[0] === "-user") {
+        target = bodyString.split(" ")[1] + " ";
+    }
+
+    const params = body.split(" ");
+    if (target.length > 0) {
+        return (
+            target.slice(0, target.length - 1) +
+            ": " +
+            searchString(urlString, params.slice(3, params.length))
+        );
+    } else {
+        return searchString(urlString, params.slice(1, params.length));
+    }
+}
+
+function searchString(site: string, parameters: string[]) {
+    if (parameters.length === 1) {
+        return site + parameters[0];
+    }
+
+    return site + parameters[0] + "+" + parameters.slice(1, parameters.length).join("+").slice(0);
+}

@@ -1,0 +1,260 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/*
+ * Test AI Detector Vote to First Warn and Annul Single Game
+ *
+ * This test verifies that:
+ * 1. A player can report another player for AI use after a game
+ * 2. The E2E_AI_DETECTOR can see and vote on the AI use report
+ * 3. The AI detector can vote to first warn and annul (single game only)
+ * 4. The warned user sees a warning modal when they log in
+ *
+ * Uses seeded users:
+ * - E2E_AI_DETECTOR: AI Detector with AI_DETECTOR moderator powers
+ *
+ * Requires environment variables:
+ * - E2E_MODERATOR_PASSWORD: Password for E2E_AI_DETECTOR
+ */
+
+import type { CreateContextOptions } from "@helpers";
+
+import { BrowserContext, expect, TestInfo } from "@playwright/test";
+import {
+    captureReportNumber,
+    generateUniqueTestIPv6,
+    loginAsUser,
+    navigateToReport,
+    newTestUsername,
+    prepareNewUser,
+    reportPlayerByColor,
+    turnOffDynamicHelp,
+} from "@helpers/user-utils";
+import {
+    acceptDirectChallenge,
+    createDirectChallenge,
+    defaultChallengeSettings,
+} from "@helpers/challenge-utils";
+import { playMoves, resignActiveGame, waitForGameViewReady } from "@helpers/game-utils";
+import { submitReportVote, withIncidentIndicatorLock } from "@helpers/report-utils";
+import { log } from "@helpers/logger";
+
+export const aiDetectorVoteFirstWarnAndAnnulTest = async (
+    {
+        createContext,
+    }: {
+        createContext: (options?: CreateContextOptions) => Promise<BrowserContext>;
+    },
+    testInfo: TestInfo,
+) => {
+    return withIncidentIndicatorLock(testInfo, async () => {
+        log("=== AI Detector Vote to First Warn and Annul Single Game Test ===");
+
+        // Check for required password
+        const password = process.env.E2E_MODERATOR_PASSWORD;
+        if (!password) {
+            throw new Error(
+                "E2E_MODERATOR_PASSWORD environment variable must be set to run this test",
+            );
+        }
+
+        // 1. Create two users who will play a game
+        log("Creating reporter user...");
+        const reporterUsername = newTestUsername("aiDetFWAReporter");
+        const { userPage: reporterPage } = await prepareNewUser(
+            createContext,
+            reporterUsername,
+            "test",
+        );
+        log(`Reporter user created: ${reporterUsername} ✓`);
+
+        log("Creating reported user (alleged AI user)...");
+        const reportedUsername = newTestUsername("aiDetFWAReported");
+        const reportedPassword = "test";
+        const { userPage: reportedPage } = await prepareNewUser(
+            createContext,
+            reportedUsername,
+            reportedPassword,
+        );
+        log(`Reported user created: ${reportedUsername} ✓`);
+
+        // 2. Play a game between the two users
+        log("Setting up game...");
+        const boardSize = "19x19";
+        const handicap = 0;
+
+        await createDirectChallenge(reporterPage, reportedUsername, {
+            ...defaultChallengeSettings,
+            ranked: false,
+            gameName: "E2E AI Detector First Warn Test Game",
+            boardSize: boardSize,
+            speed: "live",
+            timeControl: "byoyomi",
+            mainTime: "300",
+            timePerPeriod: "30",
+            periods: "5",
+            handicap: handicap.toString(),
+        });
+
+        await acceptDirectChallenge(reportedPage, reporterPage);
+        log("Game created and accepted ✓");
+
+        // Wait for the Goban to be visible & ready
+        const goban = reporterPage.locator(".Goban[data-pointers-bound]");
+        await goban.waitFor({ state: "visible" });
+
+        // Play some moves
+        log("Playing game moves...");
+        const moves = [
+            "P4",
+            "D3",
+            "Q16",
+            "D16",
+            "N16",
+            "P16",
+            "P15",
+            "Q15",
+            "Q14",
+            "O15",
+            "P17",
+            "O16",
+        ];
+
+        await playMoves(reporterPage, reportedPage, moves, boardSize, 0, handicap);
+        log("Moves played ✓");
+
+        await resignActiveGame(reportedPage);
+        await expect(reporterPage.getByText("by Resignation")).toBeVisible();
+        log("Game finished ✓");
+
+        // 3. Reporter reports the other player for AI use
+        log(`Reporting ${reportedUsername} for AI use...`);
+
+        // Wait for the post-game view to settle (PlayerCard avatars,
+        // AIReview) before opening PlayerDetails.
+        await waitForGameViewReady(reporterPage);
+
+        await reportPlayerByColor(
+            reporterPage,
+            ".white",
+            "ai_use",
+            "E2E test - This player is using AI assistance",
+        );
+        log("AI use report submitted ✓");
+
+        // Capture the report number from the reporter's page
+        const reportNumber = await captureReportNumber(reporterPage);
+        log(`Report number captured: ${reportNumber} ✓`);
+
+        // 4. Set up AI Detector user
+        log("Setting up E2E_AI_DETECTOR user...");
+        const uniqueIPv6 = generateUniqueTestIPv6();
+        const aiDetectorContext = await createContext({
+            extraHTTPHeaders: {
+                "X-Forwarded-For": uniqueIPv6,
+            },
+        });
+        const aiDetectorPage = await aiDetectorContext.newPage();
+        await loginAsUser(aiDetectorPage, "E2E_AI_DETECTOR", password);
+        await turnOffDynamicHelp(aiDetectorPage);
+        log("E2E_AI_DETECTOR logged in ✓");
+
+        // 5. AI Detector navigates to the specific report
+        log(`AI Detector navigating to report ${reportNumber}...`);
+        await navigateToReport(aiDetectorPage, reportNumber);
+        log("Navigated to report ✓");
+
+        // Verify the report type is AI Use (use .first() to avoid strict mode violation)
+        await expect(aiDetectorPage.getByText("AI Use").first()).toBeVisible();
+        log("Confirmed report type is AI Use ✓");
+
+        // Verify the reported user is shown (use .first() to avoid strict mode violation)
+        await expect(aiDetectorPage.getByText(reportedUsername).first()).toBeVisible();
+        log(`Confirmed report is about ${reportedUsername} ✓`);
+
+        // 6. AI Detector votes to first warn and annul (single game only)
+        log("AI Detector voting to first warn and annul (single game only)...");
+
+        // Select the "First warning for AI user (annul reported game only)" radio button by clicking the input
+        const firstWarnRadio = aiDetectorPage.locator('input[value="first_warn_ai_user"]');
+        await firstWarnRadio.click();
+
+        // Wait for the radio button to be checked
+        await expect(firstWarnRadio).toBeChecked();
+        log("Selected 'First warning for AI user (annul reported game only)' action ✓");
+
+        // Click the Vote button to submit the vote
+        await submitReportVote(aiDetectorPage);
+        log("Vote submitted ✓");
+
+        // Check that no error modal appeared
+        const errorModal = aiDetectorPage.getByText(/Error during vote submission/);
+        await expect(errorModal)
+            .not.toBeVisible({ timeout: 1000 })
+            .catch(() => {
+                throw new Error("Vote submission failed - error modal appeared");
+            });
+
+        // 7. Log in as the warned user and verify they see the warning modal
+        log(`Logging in as warned user ${reportedUsername}...`);
+
+        // Close the reported user's existing page
+        await reportedPage.close();
+
+        // Create a new context and page for the warned user
+        const warnedUserIPv6 = generateUniqueTestIPv6();
+        const warnedUserContext = await createContext({
+            extraHTTPHeaders: {
+                "X-Forwarded-For": warnedUserIPv6,
+            },
+        });
+        const warnedUserPage = await warnedUserContext.newPage();
+        await loginAsUser(warnedUserPage, reportedUsername, reportedPassword);
+        log("Warned user logged in ✓");
+
+        // 8. Check for the warning modal
+        log("Checking for warning modal...");
+
+        // Wait for the warning backdrop to appear
+        const warningBackdrop = warnedUserPage.locator(".AccountWarning-backdrop");
+        await expect(warningBackdrop).toBeVisible({ timeout: 10000 });
+        log("Warning backdrop visible ✓");
+
+        // Check for the warning modal container
+        const warningModal = warnedUserPage.locator(".AccountWarning");
+        await expect(warningModal).toBeVisible({ timeout: 5000 });
+        log("Warning modal visible ✓");
+
+        // Check for the "I understand" checkbox
+        const understandCheckbox = warnedUserPage.locator("input#AccountWarning-accept");
+        await expect(understandCheckbox).toBeVisible();
+        log("'I understand' checkbox visible ✓");
+
+        // Check for the OK button (it will be disabled initially)
+        const okButton = warnedUserPage.locator(".AccountWarning button.primary");
+        await expect(okButton).toBeVisible();
+        log("OK button visible ✓");
+
+        log("=== Test Complete ===");
+        log("✓ Game played between two users");
+        log("✓ Reporter submitted AI use report");
+        log("✓ Report captured and navigated to by AI Detector");
+        log("✓ AI Detector successfully voted to first warn and annul (single game)");
+        log("✓ Warned user sees warning modal with checkbox and OK button");
+        log("Note: Single game annulment cannot be easily verified in E2E tests");
+    });
+};

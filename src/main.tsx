@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -15,100 +15,274 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/// <reference path="../typings_manual/index.d.ts" />
+import * as Sentry from "@sentry/browser";
+import { configure_goban } from "@/lib/configure-goban";
+import {
+    init_wasm_ownership_estimator,
+    init_remote_ownership_estimator,
+    ScoreEstimateRequest,
+    ScoreEstimateResponse,
+} from "goban";
 
-import data from "data";
+import { OgsHelpProvider } from "@/components/OgsHelpProvider";
+import { HelpFlows } from "@/views/HelpFlows";
+import { sfx } from "@/lib/sfx";
+import { post } from "@/lib/requests";
+import { ai_host } from "@/lib/sockets";
+sfx.sync();
 
-data.setDefault("theme", "light");
-data.setDefault("config", {
-    "user": {
-        "anonymous": true,
-        "id": 0,
-        "username": "Guest",
-        "ranking": -100,
-        "country": "un",
-        "pro": 0,
+declare let ogs_current_language: string;
+declare let ogs_language_version: string;
+declare let ogs_version: string;
+
+let sentry_env = "production";
+
+if (
+    /online-(go|baduk|weiqi|covay|igo).(com|net)$/.test(document.location.host) &&
+    !/dev/.test(document.location.host)
+) {
+    sentry_env = "production";
+    if (/beta/.test(document.location.host)) {
+        sentry_env = "beta";
+    }
+} else {
+    sentry_env = "development";
+}
+
+try {
+    Sentry.init({
+        dsn: "https://f8e3b8de571e412b98ff8f98e12c7f58@o589780.ingest.sentry.io/5750726",
+        release: ogs_version || "dev",
+        allowUrls: ["online-go.com", "kidsgoserver.com", "beta.online-go.com", "baduk.com"],
+        environment: sentry_env,
+        integrations: [
+            Sentry.globalHandlersIntegration({
+                onerror: true,
+                onunhandledrejection: false,
+            }),
+            Sentry.breadcrumbsIntegration({
+                console: false,
+            }),
+            // Note: browserSessionIntegration is intentionally excluded
+            // (equivalent to old autoSessionTracking: false)
+        ],
+
+        /* Several users have weird addons and extensions that cause errors
+         * that have nothing to do with OGS. This code filters some of these
+         * out so they don't get reported to Sentry. */
+        ignoreErrors: [
+            "ReferenceError",
+            "coinbase",
+            "ethereum",
+            "hideMyLocation",
+            "userAgent",
+            "zaloJSV2", // cspell:disable-line
+            "evaluating 'a.L'",
+            "document.querySelector(\"[title='Kaya']\").style",
+            "onHide is not defined",
+            "outputCurrentConfiguration",
+            "mvpConfig",
+            "?(<anonymous>)",
+            "Cannot read properties of undefined (reading 'ns')",
+
+            // Transient network failures when loading CSS for lazy chunks
+            "Unable to preload CSS",
+
+            // Library bugs
+            ").ended is not a function", // d3
+
+            // Safari bugs
+            //   broken mac app WKWebView, see
+            //   https://github.com/getsentry/sentry-javascript/issues/3040
+            "evaluating 'window.webkit.messageHandlers'",
+            //   Audio
+            "cannot call stop without calling start first",
+        ],
+    });
+
+    Sentry.setTag("version", ogs_version || "dev");
+    Sentry.setExtra("language", ogs_current_language || "unknown");
+    Sentry.setExtra("version", ogs_version || "dev");
+} catch (e) {
+    console.error(e);
+}
+
+// Reload the page when a lazy chunk's CSS fails to preload for whatever
+// reason.
+const PRELOAD_INFINITE_LOOP_GUARD_KEY = "preloadErrorReloads";
+let preload_error_processed = false;
+window.addEventListener("vite:preloadError", () => {
+    if (preload_error_processed) {
+        return;
+    }
+    preload_error_processed = true;
+    const times_loaded = parseInt(
+        sessionStorage.getItem(PRELOAD_INFINITE_LOOP_GUARD_KEY) ?? "0",
+        10,
+    );
+    if (times_loaded < 2) {
+        sessionStorage.setItem(PRELOAD_INFINITE_LOOP_GUARD_KEY, String(times_loaded + 1));
+        window.location.reload();
     }
 });
+setTimeout(() => {
+    // If this timer fires it means we're not in a preload infinite loop so we can
+    // clear out the guard
+    sessionStorage.removeItem(PRELOAD_INFINITE_LOOP_GUARD_KEY);
+}, 60000);
+
+try {
+    window.onunhandledrejection = (e) => {
+        console.error(e);
+        console.error(e.reason);
+        if (e.reason.stack) {
+            console.error(e.reason.stack);
+        }
+    };
+} catch (e) {
+    console.log(e);
+}
+
+import * as data from "@/lib/data";
+
+import * as preferences from "@/lib/preferences";
+import { applyMoveTreeLineColors } from "@/lib/move_tree_line_colors";
+
+/* Deal with "system" theme */
+data.setDefault("theme", "system");
+export function applyTheme() {
+    let theme = data.get("theme", "system");
+
+    if (theme === "system") {
+        if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            theme = "dark";
+        } else {
+            theme = "light";
+        }
+    }
+
+    // Ahead of the early return: the palette has to be right on the first
+    // call too, and this is the one place that resolves "system".
+    applyMoveTreeLineColors(theme);
+
+    if (document.documentElement.dataset.theme === theme) {
+        return;
+    }
+
+    document.documentElement.dataset.theme = theme;
+}
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+data.watch("theme", applyTheme);
+applyTheme();
+
+const default_user = {
+    anonymous: true,
+    id: 0,
+    username: "Guest",
+    ranking: -100,
+    country: "un",
+    pro: 0,
+    supporter: false,
+    is_moderator: false,
+    is_superuser: false,
+    is_tournament_moderator: false,
+    can_create_tournaments: false,
+    tournament_admin: false,
+};
+
+data.setDefault("config", { user: default_user });
+
+data.setDefault("config.user", default_user);
+
+data.setDefault("config.cdn", window.cdn_service);
+data.setDefault(
+    "config.cdn_host",
+    window.cdn_service.replace("https://", "").replace("http://", "").replace("//", ""),
+);
+data.setDefault("config.cdn_release", window.cdn_service + "/" + window.ogs_release);
+data.setDefault("config.release", window.ogs_release);
+
+configure_goban();
 
 import * as React from "react";
-import * as ReactDOM from "react-dom";
-import { Router, Route, IndexRoute, browserHistory } from "react-router";
+import * as ReactDOM from "react-dom/client";
+import { browserHistory } from "@/lib/ogsHistory";
+import { routes } from "./routes";
+
 //import {Promise} from "es6-promise";
-import {get} from "requests";
-import {errorAlerter} from "misc";
-import * as sockets from "sockets";
-import {_} from "translate";
-import {init_tabcomplete} from "tabcomplete";
-import player_cache from "player_cache";
-import {toast} from 'toast';
+import { errorAlerter } from "@/lib/misc";
+import { close_all_popovers } from "@/lib/popover";
+import { init_safe_area_variables } from "@/lib/safe_area";
+import { init_visual_viewport_variables } from "@/lib/visual_viewport";
+import * as sockets from "@/lib/sockets";
+import { _, setCurrentLanguage } from "@/lib/translate";
 
-import {NavBar} from "NavBar";
-import {Announcements} from "Announcements";
-import {SignIn} from "SignIn";
-import {Register} from "Register";
-import {Overview} from "Overview";
-import {Admin} from "Admin";
-import {AdminTournamentScheduleList} from "AdminTournamentScheduleList";
-import {ChatView} from "ChatView";
-import {Developer} from "Developer";
-import {Game} from "Game";
-import {Group} from "Group";
-import {GroupCreate} from "GroupCreate";
-import {GroupList} from "GroupList";
-import {Ladder} from "Ladder";
-import {LadderList} from "LadderList";
-import {LeaderBoard} from "LeaderBoard";
-import {Library} from "Library";
-import {LibraryGameHistory} from "LibraryGameHistory";
-import {LibraryPlayer} from "LibraryPlayer";
-import {Play} from "Play";
-import {Moderator} from "Moderator";
-import {ObserveGames} from "ObserveGames";
-import {Puzzle} from "Puzzle";
-import {PuzzleList} from "PuzzleList";
-import {PuzzleModify} from "PuzzleModify";
-import {Supporter} from "Supporter";
-import {Tournament} from "Tournament";
-import {TournamentListMainView} from "TournamentList";
-import {TransactionHistory} from "TransactionHistory";
-import {Tutorial} from "Tutorial";
-import {User} from "User";
-import {RatingHistory} from "RatingHistory";
-import {Settings} from "Settings";
-import {Styling} from "Styling";
-import {AnnouncementCenter} from "AnnouncementCenter";
-import * as docs from "docs";
+import * as player_cache from "@/lib/player_cache";
+import { toast } from "@/lib/toast";
+import cached from "@/lib/cached";
+import { get_device_id } from "@/views/SignIn";
 
-declare const swal;
+import { ConfigSchema } from "@/lib/data_schema";
+import "debug";
+import "@/ogs.css";
 
+/**
+ * getPreferredLanguage() is defined in index.html. It gets the user's chosen
+ * language from preferences.
+ */
+declare function getPreferredLanguage(): string;
+
+// Initialize moment in our current language
+setCurrentLanguage(getPreferredLanguage());
 
 /*** Load our config ***/
-data.watch("config", (config) => {
-    for (let key in config) {
-        data.set(`config.${key}`, config[key]);
+
+/* cached.config is supplied by the server and stored with `data.set()` in response to a login action (login, register),
+   after which a page-reload occurs (due to navigation to logged-in page) and that's where this is executed */
+
+const cached_config = data.get(cached.config);
+
+// If cached_config doesn't exist, then the user-defaults set further above (anonymous) will apply...
+
+if (cached_config) {
+    /* We do a pass where we set everything, and then we 'set' everything
+     * again to do the emits that we are expecting. Otherwise triggers
+     * that are depending on other parts of the config will fire without
+     * having up to date information (in particular user / auth stuff) */
+    for (const key in cached_config) {
+        data.setWithoutEmit(`config.${key as keyof ConfigSchema}`, (cached_config as any)[key]);
     }
-});
-get("ui/config").then((config) => data.set("config", config));
-data.watch("config.user", (user) => {
-    player_cache.update(user);
-    data.set("user", user);
-    window["user"] = user;
-});
+    for (const key in cached_config) {
+        data.set(`config.${key as keyof ConfigSchema}`, (cached_config as any)[key]);
+    }
+}
 
+/* In dev, the cached ui/config in localStorage (rehydrated by the loop above)
+ * includes a prod cdn_release that bypasses the vite /img/* middleware.
+ * Re-pin to the dev server so asset URLs in themes resolve against local disk.
+ *
+ * Gated on import.meta.env.DEV — statically replaced at build time, so the
+ * whole block is tree-shaken from production bundles and can never clobber a
+ * server-computed cdn_release in prod or self-hosted deployments. */
+if (import.meta.env.DEV && window.cdn_service) {
+    data.set("config.cdn", window.cdn_service);
+    data.set("config.cdn_release", window.cdn_service + "/" + (window.ogs_release || ""));
+}
 
-/*** SweetAlert setup ***/
-swal.setDefaults({
-    confirmButtonClass: "primary",
-    cancelButtonClass: "reject",
-    buttonsStyling: false,
-    reverseButtons: true,
-    confirmButtonText: _("OK"),
-    cancelButtonText: _("Cancel"),
-    allowEscapeKey: true,
-    //focusCancel: true,
-});
+const user = data.get("config.user"); // guaranteed to return anonymous by the defaults, unless they are logged in
 
+try {
+    Sentry.setUser({
+        id: user.id,
+        username: user.username,
+    });
+} catch (e) {
+    console.error(e);
+}
+
+player_cache.update(user);
+data.set("user", user);
+window.user = user;
 
 /***
  * Test if local storage is disabled for some reason (Either because the user
@@ -116,172 +290,121 @@ swal.setDefaults({
  * Safari in private browsing mode which implicitly disables the feature.)
  */
 try {
-    localStorage.setItem('localstorage-test', "true");
-} catch (e) {
+    localStorage.setItem("localstorage-test", "true");
+} catch {
     toast(
         <div>
-            {_("It looks like localStorage is disabled on your browser. Unfortunately you won't be able to login without enabling it first.")}
-        </div>
+            {_(
+                "It looks like localStorage is disabled on your browser. Unfortunately you won't be able to sign in without enabling it first.",
+            )}
+        </div>,
     );
 }
 
-
-/*** Layout our main view and routes ***/
-const Main = props => (<div><NavBar/><Announcements/>{props.children}</div>);
-const PageNotFound = () => (<div style={{display: "flex", flex: "1", alignItems: "center", justifyContent: "center"}}>{_("Page not found")}</div>);
-const Default = () => (
-    data.get("config.user").anonymous
-        ?  <ObserveGames/>
-        :  <Overview/>
-);
-
 /** Connect to the chat service */
-let auth_connect_fn = () => {return; };
-data.watch("config.user", (user) => {
-    if (!user.anonymous) {
-        auth_connect_fn = (): void => {
-            sockets.comm_socket.send("authenticate", {
-                auth: data.get("config.chat_auth"),
-                player_id: user.id,
-                username: user.username,
-            });
-            sockets.comm_socket.send("chat/connect", {
-                auth: data.get("config.chat_auth"),
-                player_id: user.id,
-                ranking: user.ranking,
-                username: user.username,
-                ui_class: user.ui_class,
-            });
-        };
-    } else if (user.id < 0) {
-        auth_connect_fn = (): void => {
-            sockets.comm_socket.send("chat/connect", {
-                player_id: user.id,
-                ranking: user.ranking,
-                username: user.username,
-                ui_class: user.ui_class,
-            });
-        };
-    }
-    if (sockets.comm_socket.connected) {
-        auth_connect_fn();
+for (const socket of [sockets.socket, sockets.ai_socket]) {
+    socket.authenticate({
+        jwt: data.get("config.user_jwt", ""),
+        device_id: get_device_id(),
+        user_agent: navigator.userAgent,
+        language: ogs_current_language,
+        language_version: ogs_language_version,
+        client_version: ogs_version,
+    });
+}
+
+data.watch("config.user_jwt", (jwt?: string) => {
+    if (sockets.ai_socket.connected) {
+        sockets.ai_socket.authenticate({
+            jwt: jwt ?? "",
+            device_id: get_device_id(),
+            user_agent: navigator.userAgent,
+            language: ogs_current_language,
+            language_version: ogs_language_version,
+            client_version: ogs_version,
+        });
     }
 });
-sockets.comm_socket.on("connect", () => {auth_connect_fn(); });
 
+sockets.socket.on("user/jwt", (jwt: string) => {
+    console.log("Updating JWT");
+    data.set("config.user_jwt", jwt);
+});
+
+sockets.socket.on("user/update", (user: any) => {
+    if (user.id === data.get("config.user")?.id) {
+        console.log("Updating user", user);
+        data.set("config.user", user);
+        player_cache.update(user);
+        data.set("user", user);
+        window.user = user;
+    } else {
+        console.log("Ignoring user update for user", user);
+    }
+});
+
+sockets.socket.on("config/last_game", (last_game: any) => {
+    const config = data.get("config");
+    if (config) {
+        config.last_game = last_game;
+        data.set("config", config);
+    }
+});
+
+/*** Setup remote ownership estimation for score estimation and autoscoring */
+init_remote_ownership_estimator(remote_ownership_estimator);
+function remote_ownership_estimator(req: ScoreEstimateRequest): Promise<ScoreEstimateResponse> {
+    return new Promise<ScoreEstimateResponse>((resolve) => {
+        req.jwt = data.get("config.user_jwt", "");
+        resolve(post(`${ai_host}/api/score`, req));
+    });
+}
+init_wasm_ownership_estimator()
+    .then(() => {
+        // console.log('SE Initialized');
+    })
+    .catch((err) => console.error(err));
 
 /*** Generic error handling from the server ***/
-sockets.termination_socket.on("ERROR", errorAlerter);
+sockets.socket.on("ERROR", errorAlerter);
 
-
-/*** Google analytics ***/
-declare var ga;
-browserHistory.listen(location => {
+browserHistory.listen(() => {
     try {
-        let cleaned_path = location.pathname.replace(/[0-9]+/, "ID");
-
-        if (ga) {
-            //console.log('Sending pageview', cleaned_path);
-            window["ga"]("set", "page", cleaned_path);
-            window["ga"]("send", "pageview");
-        }
+        close_all_popovers();
     } catch (e) {
         console.log(e);
     }
 });
 
-
 /*** Some finial initializations ***/
-init_tabcomplete();
 
+//  don't inherit old rdh values
+if (user.anonymous) {
+    data.remove("rdh-system-state");
+}
 
-const routes = (
-<Router history={browserHistory}>
-    <Route path="/" component={Main}>
-        <IndexRoute component={Default}/>
-        <Route path="/sign-in" component={SignIn}/>
-        <Route path="/register" component={Register}/>
-        <Route path="/overview" component={Overview}/>
+init_safe_area_variables();
+init_visual_viewport_variables();
 
-        <Route path="/play" component={Play}/>
-        <Route path="/chat" component={ChatView}/>
-        <Route path="/observe-games" component={ObserveGames}/>
-        <Route path="/game/:game_id" component={Game}/>
-        <Route path="/game/view/:game_id" component={Game}/>
-        <Route path="/review/:review_id" component={Game}/>
-        <Route path="/review/view/:review_id" component={Game}/>
-        <Route path="/demo/:review_id" component={Game}/>
-        <Route path="/demo/view/:review_id" component={Game}/>
+/* Initialization done, render!! */
+const svg_loader = document.getElementById("loading-svg-container");
+svg_loader?.parentNode?.removeChild(svg_loader);
 
-        <Route path="/player/:user_id" component={User}/>
-        <Route path="/player/:user_id/*" component={User}/>
-        <Route path="/player/:user_id/**/*" component={User}/>
-        <Route path="/player/settings" component={Settings}/>
-        <Route path="/player/supporter" component={Supporter}/>
-        <Route path="/player/transaction-history" component={TransactionHistory}/>
+const react_root = ReactDOM.createRoot(document.getElementById("main-content") as HTMLElement);
 
-        <Route path="/user/view/:user_id" component={User}/>
-        <Route path="/user/view/:user_id/*" component={User}/>
-        <Route path="/user/view/:user_id/**/*" component={User}/>
-        <Route path="/ratinghistory/:user_id" component={RatingHistory}/>
-        <Route path="/ratinghistory/:user_id/*" component={RatingHistory}/>
-        <Route path="/ratinghistory/:user_id/**/*" component={RatingHistory}/>
-        <Route path="/settings" component={Settings}/>
-        <Route path="/user/settings" component={Settings}/>
-        <Route path="/user/supporter" component={Supporter}/>
-        <Route path="/user/transaction-history" component={TransactionHistory}/>
+react_root.render(
+    <React.StrictMode>
+        <OgsHelpProvider>
+            <ModalProvider>{routes}</ModalProvider>
+            <HelpFlows />
+        </OgsHelpProvider>
+    </React.StrictMode>,
+);
 
-        <Route path="/supporter" component={Supporter}/>
-        <Route path="/support" component={Supporter}/>
-        <Route path="/donate" component={Supporter}/>
-        <Route path="/library" component={Library}/>
-        <Route path="/library/game-history" component={LibraryGameHistory}/>
-        <Route path="/library/:player_id/:collection_id" component={LibraryPlayer}/>
-        <Route path="/library/:player_id" component={LibraryPlayer}/>
-        <Route path="/groups" component={GroupList}/>
-        <Route path="/group/create" component={GroupCreate}/>
-        <Route path="/group/:group_id" component={Group}/>
-        <Route path="/tournament/new/:group_id" component={Tournament}/>
-        <Route path="/tournament/new" component={Tournament}/>
-        <Route path="/tournament/:tournament_id" component={Tournament}/>
-        <Route path="/tournaments/:tournament_id" component={Tournament}/>
-        <Route path="/tournaments" component={TournamentListMainView}/>
-        <Route path="/tournaments/" component={TournamentListMainView}/>
-        <Route path="/ladders" component={LadderList}/>
-        <Route path="/ladder/:ladder_id" component={Ladder}/>
-        <Route path="/puzzles" component={PuzzleList}/>
-        <Route path="/puzzle/:puzzle_id" component={Puzzle}/>
-        <Route path="/puzzle/create" component={PuzzleModify}/>
-        <Route path="/puzzle/edit/:puzzle_id" component={PuzzleModify}/>
-        <Route path="/leaderboards" component={LeaderBoard}/>
-        <Route path="/leaderboard" component={LeaderBoard}/>
-        <Route path="/developer" component={Developer}/>
-        <Route path="/admin" component={Admin}/>
-        <Route path="/announcement-center" component={AnnouncementCenter}/>
-        {/*
-        <Route path="/admin/tournament-scheduler/:schedule_id" component={TournamentModify}/>
-        */}
-        <Route path="/admin/tournament-schedule-list" component={AdminTournamentScheduleList}/>
-        <Route path="/moderator" component={Moderator}/>
-        <Route path="/learn-to-play-go" component={Tutorial}/>
-        <Route path="/docs/learn-to-play-go" component={Tutorial}/>
+window.data = data;
+window.preferences = preferences;
+window.player_cache = player_cache;
 
-        <Route path="/styling" component={Styling}/>
-
-
-        <Route path="/docs/about" component={docs.About}/>
-        <Route path="/docs/privacy-policy" component={docs.PrivacyPolicy}/>
-        <Route path="/docs/terms-of-service" component={docs.TermsOfService}/>
-        <Route path="/docs/contact-information" component={docs.ContactInformation}/>
-        <Route path="/docs/refund-policy" component={docs.RefundPolicy}/>
-
-        <Route path="/docs/go-rules-comparison-matrix" component={docs.RulesMatrix}/>
-        <Route path="/docs/changelog" component={docs.ChangeLog}/>
-        <Route path="/docs/team" component={docs.Team}/>
-        <Route path="/docs/other-go-resources" component={docs.GoResources}/>
-
-        <Route path="/*" component={PageNotFound}/>
-    </Route>
-</Router>);
-
-ReactDOM.render(routes, document.getElementById("main-content"));
+import * as requests from "@/lib/requests";
+import { ModalProvider } from "./components/ModalProvider/ModalProvider";
+window.requests = requests;

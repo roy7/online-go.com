@@ -1,0 +1,378 @@
+/*
+ * Copyright (C)  Online-Go.com
+ * Copyright (C)  Benjamin P. Jones
+ */
+
+import { PlayControls } from "./PlayControls";
+import { GameStateHeader } from "./GameStateHeader";
+import { render, screen } from "@testing-library/react";
+import * as React from "react";
+import * as data from "@/lib/data";
+import { MemoryRouter as Router } from "react-router-dom";
+import { GobanControllerContext } from "./goban_context";
+import { act } from "react";
+import { OgsHelpProvider } from "@/components/OgsHelpProvider";
+import { GobanController } from "../../lib/GobanController";
+import { GobanRenderer, ConditionalMoveTree } from "goban";
+
+const TEST_USER = {
+    anonymous: false,
+    id: 123,
+    username: "test_user",
+    registration_date: "2022-05-10 11:03:24.299562+00:00",
+    ratings: {
+        version: 5,
+        overall: { rating: 1500, deviation: 350, volatility: 0.06 },
+    },
+    country: "un",
+    professional: false,
+    ranking: 23,
+    provisional: 0,
+    can_create_tournaments: true,
+    is_moderator: false,
+    is_superuser: false,
+    moderator_powers: 0,
+    offered_moderator_powers: 0,
+    is_tournament_moderator: false,
+    supporter: true,
+    supporter_level: 4,
+    tournament_admin: false,
+    ui_class: "",
+    icon: "https://secure.gravatar.com/avatar/8d809ecc50408afc399a4cb7c8fd4510?s=32&d=retro",
+    email: "",
+    email_validated: false,
+    is_announcer: false,
+    last_supporter_trial: "",
+} as const;
+
+const PLAY_CONTROLS_DEFAULTS = {
+    show_cancel: true,
+    player_to_move: 1,
+    onCancel: () => {
+        return;
+    },
+    review_list: [] as any,
+    stashed_conditional_moves: undefined,
+    mode: "play",
+    phase: "play",
+    title: "",
+    show_title: false,
+    renderEstimateScore: () => {
+        return <React.Fragment />;
+    },
+    renderAnalyzeButtonBar: () => {
+        return <React.Fragment />;
+    },
+    onShareAnalysis: () => {
+        return;
+    },
+    variation_name: "",
+    updateVariationName: () => {
+        return;
+    },
+    variationKeyPress: () => {
+        return;
+    },
+    annulled: false,
+    annulment_reason: null,
+    zen_mode: false,
+    selected_chat_log: "main",
+    stopEstimatingScore: () => {
+        return;
+    },
+} as const;
+
+function WrapTest(props: { controller: GobanController; children: any }): React.ReactElement {
+    const { controller } = props;
+    return (
+        <OgsHelpProvider>
+            <Router>
+                <GobanControllerContext.Provider value={controller}>
+                    {props.children}
+                </GobanControllerContext.Provider>
+            </Router>
+        </OgsHelpProvider>
+    );
+}
+
+test("No moves have been played", () => {
+    const controller = new GobanController({
+        game_id: 1234,
+        // TEST_USER must be a member of the game in order for cancel to show up.
+        players: {
+            black: { id: 123, username: "test_user" },
+            white: { id: 456, username: "test_user2" },
+        },
+    });
+    data.set("user", TEST_USER);
+
+    render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    // Undo lives in the action bar, not here.
+    expect(screen.queryByText("Undo")).toBeNull();
+    expect(screen.queryByText("Accept Undo")).toBeNull();
+    expect(screen.queryByText("Submit")).toBeNull();
+    expect(screen.getByText("Pass")).toBeDefined();
+    // Resign sits beside Pass; an unplayed game can still be cancelled, so
+    // the button labels itself accordingly.
+    expect(screen.getByText("Cancel game")).toBeDefined();
+});
+
+test("Don't render play buttons if user is not a player", () => {
+    const controller = new GobanController({ game_id: 1234 });
+    data.set("user", TEST_USER);
+
+    render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    expect(screen.queryByText("Resign")).toBeNull();
+    expect(screen.queryByText("Cancel game")).toBeNull();
+    expect(screen.queryByText("Undo")).toBeNull();
+    expect(screen.queryByText("Accept Undo")).toBeNull();
+    expect(screen.queryByText("Submit")).toBeNull();
+    expect(screen.queryByText("Pass")).toBeNull();
+});
+
+test("PlayControls is empty when there is nothing to show", () => {
+    // A spectator has nothing to act on. (A player always has at least the
+    // resign button while the game is in progress.)
+    const controller = new GobanController({
+        game_id: 1234,
+        moves: [
+            [15, 15, 5241],
+            [2, 2, 68110],
+            [16, 2, 53287],
+        ],
+        players: {
+            black: { id: 987, username: "someone" },
+            white: { id: 456, username: "test_user2" },
+        },
+    });
+    data.set("user", TEST_USER);
+
+    const { container } = render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    // Truly empty, so the `.PlayControls:empty` rule can drop its padding.
+    expect(container.querySelector(".PlayControls")).toBeEmptyDOMElement();
+});
+
+test("A player on the opponent's turn still gets the resign button", () => {
+    const controller = new GobanController({
+        game_id: 1234,
+        moves: [
+            [15, 15, 5241],
+            [2, 2, 68110],
+            [16, 2, 53287],
+        ],
+        // Black went last, so it is the opponent's turn and there is no
+        // move control to offer the user.
+        players: {
+            black: { id: 123, username: "test_user" },
+            white: { id: 456, username: "test_user2" },
+        },
+    });
+    data.set("user", TEST_USER);
+
+    const { container } = render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    expect(screen.queryByText("Pass")).toBeNull();
+    expect(container.querySelector(".resign-button")).not.toBeNull();
+});
+
+test("Renders accept undo if undo requested", () => {
+    const controller = new GobanController({
+        game_id: 1234,
+        // Need to play at least one move before Undo button shows up
+        moves: [
+            [15, 15, 5241],
+            [2, 2, 68110],
+            [16, 2, 53287],
+        ],
+        players: {
+            // Since three moves have been played, it's white's turn
+            // That is one of the requirements for "accept undo" showing up.
+            white: { id: 123, username: "test_user" },
+            black: { id: 456, username: "test_user2" },
+        },
+    });
+    controller.goban.engine.undo_requested_by = 456;
+    controller.goban.engine.undo_requested = 3;
+    data.set("user", TEST_USER);
+
+    render(
+        <WrapTest controller={controller}>
+            <GameStateHeader />
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    expect(screen.queryByText("Undo")).toBeNull();
+    expect(screen.getByText("Accept Undo", { exact: false })).toBeDefined();
+    expect(screen.getByText("test_user2 has requested an undo")).toBeDefined();
+});
+
+test("Renders Pass if it is the user's turn", () => {
+    const controller = new GobanController({
+        game_id: 1234,
+        moves: [
+            [15, 15, 5241],
+            [2, 2, 68110],
+            [16, 2, 53287],
+        ],
+        players: {
+            // Since three moves have been played, it's white's turn
+            white: { id: 123, username: "test_user" },
+            black: { id: 456, username: "test_user2" },
+        },
+    });
+    controller.goban.engine.undo_requested = 3;
+    data.set("user", TEST_USER);
+
+    render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    expect(screen.getByText("Pass")).toBeDefined();
+});
+
+/**
+ * ```
+ * A19 B18
+ * ├── cc
+ * ├── dd ee
+ * │   └── ff gg
+ * └── hh ii
+ * jj kk
+ * ```
+ */
+function makeConditionalMoveTree() {
+    return ConditionalMoveTree.decode([
+        null,
+        {
+            aa: ["bb", { cc: [null, {}], dd: ["ee", { ff: ["gg", {}] }], hh: ["ii", {}] }],
+            jj: ["kk", {}],
+        },
+    ]);
+}
+
+test("Renders conditional moves", () => {
+    const controller = new GobanController({
+        game_id: 1234,
+        moves: [],
+        players: {
+            // Since three moves have been played, it's white's turn
+            white: { id: 123, username: "test_user" },
+            black: { id: 456, username: "test_user2" },
+        },
+    });
+    controller.goban.setMode("conditional");
+    controller.goban.setConditionalTree(makeConditionalMoveTree());
+
+    render(
+        <WrapTest controller={controller}>
+            <GameStateHeader />
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    expect(screen.getByText("Conditional Move Planner")).toBeDefined();
+    expect(screen.getByText("A19")).toBeDefined();
+});
+
+test("Unsubscribe from all events on unmount", () => {
+    const controller = new GobanController({ game_id: 1234 });
+    data.set("user", TEST_USER);
+
+    const getListenerCounts = (emitter: GobanRenderer) =>
+        Object.fromEntries(emitter.eventNames().map((key) => [key, emitter.listenerCount(key)]));
+
+    // Goban may set up listeners on itself
+    const listeners_before = getListenerCounts(controller.goban);
+
+    const { unmount } = render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+    unmount();
+
+    expect(getListenerCounts(controller.goban)).toEqual(listeners_before);
+});
+
+test("Pause buttons show up", () => {
+    const controller = new GobanController({
+        game_id: 1234,
+        // TEST_USER must be a member of the game in order for cancel to show up.
+        players: {
+            black: TEST_USER,
+            white: { id: 456, username: "test_user2" },
+        },
+    });
+    data.set("user", TEST_USER);
+
+    render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+    act(() => {
+        // It would be more realistic to mock the "game/${id}/clock" socket event,
+        // but AdHocClock is a complicated object and I'm not sure what params
+        // to use to get the goban to actually pause.
+        controller.goban.pause_control = {
+            paused: {
+                pausing_player_id: 123,
+                pauses_left: 4,
+            },
+        };
+        controller.goban.emit("paused", true);
+    });
+
+    expect(screen.getByText("Resume")).toBeDefined();
+    expect(screen.getByText("Game Paused")).toBeDefined();
+    expect(screen.getByText("4 pauses left for Black")).toBeDefined();
+});
+
+test("Review list is hidden in zen mode", () => {
+    const controller = new GobanController({
+        game_id: 1234,
+        phase: "finished",
+        players: {
+            black: { id: 987, username: "someone" },
+            white: { id: 456, username: "test_user2" },
+        },
+    });
+    controller.review_list = [{ id: 1, owner: { id: 987, username: "someone" } }] as any;
+    data.set("user", TEST_USER);
+
+    render(
+        <WrapTest controller={controller}>
+            <PlayControls {...PLAY_CONTROLS_DEFAULTS} />
+        </WrapTest>,
+    );
+
+    expect(screen.getByText("Reviews")).toBeDefined();
+
+    act(() => {
+        controller.setZenMode(true);
+    });
+
+    expect(screen.queryByText("Reviews")).toBeNull();
+});

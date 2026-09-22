@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -15,36 +15,40 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-import {comm_socket} from "sockets";
-import {EventEmitter} from "eventemitter3";
+import { socket } from "@/lib/sockets";
+import { TypedEventEmitter } from "@/lib/TypedEventEmitter";
+import { Batcher } from "@/lib/batcher";
 
-let listeners: {[id: number]: Array<any>} = {};
-let state = {};
-let event_emitter = new EventEmitter();
+interface Events {
+    "users-online-updated": never;
+}
 
-comm_socket.on("connect", () => {
-    let list = [];
-    for (let id in state) {
-        list.push(id);
+const listeners: { [id: number]: Array<any> } = {};
+const state: { [player_id: number]: boolean } = {};
+const event_emitter = new TypedEventEmitter<Events>();
+
+socket.on("connect", () => {
+    const list: number[] = [];
+    for (const id in state) {
+        list.push(parseInt(id));
     }
     if (list.length) {
-        comm_socket.send("user/monitor", list);
+        socket.send("user/monitor", { user_ids: list });
     }
 });
 
-comm_socket.on("user/state", (states) => {
-    let i;
-    for (let id in states) {
+socket.on("user/state", (states) => {
+    for (const id in states) {
         state[id] = states[id];
-        for (i = 0; i < listeners[id].length; ++i) {
+        for (let i = 0; i < listeners[id].length; ++i) {
             listeners[id][i](id, state[id]);
         }
     }
     event_emitter.emit("users-online-updated");
 });
 
-comm_socket.on("disconnect", () => {
-    for (let id in state) {
+socket.on("disconnect", () => {
+    for (const id in state) {
         state[id] = false;
         for (let i = 0; i < listeners[id].length; ++i) {
             listeners[id][i](id, state[id]);
@@ -53,31 +57,28 @@ comm_socket.on("disconnect", () => {
     event_emitter.emit("users-online-updated");
 });
 
-let subscribe_queue = null;
-function subscribe(player_id, cb) {
+const subscribe_queue = new Batcher<number>((ids) => {
+    socket.send("user/monitor", { user_ids: ids });
+});
+
+type callback = (player_id: number, online: boolean) => void;
+
+function subscribe(player_id: number, cb: callback) {
     if (player_id in state) {
         cb(player_id, state[player_id]);
         listeners[player_id].push(cb);
         return;
     }
 
-    if (subscribe_queue == null) {
-        subscribe_queue = [];
-        setTimeout(() => {
-            comm_socket.send("user/monitor", subscribe_queue);
-            subscribe_queue = null;
-        }, 1);
-    }
-
     state[player_id] = false;
     listeners[player_id] = [cb];
-    subscribe_queue.push(player_id);
-};
+    subscribe_queue.soon(player_id);
+}
 
-function unsubscribe(player_id, cb) {
+function unsubscribe(player_id: number, cb: callback) {
     if (player_id in listeners) {
         for (let i = 0; i < listeners[player_id].length; ++i) {
-            if (listeners[player_id] === cb) {
+            if (listeners[player_id][i] === cb) {
                 listeners[player_id].splice(i, 1);
                 return;
             }
@@ -85,13 +86,12 @@ function unsubscribe(player_id, cb) {
     }
 }
 
-function is_player_online(player_id) {
+function is_player_online(player_id: number) {
     if (player_id in state) {
         return state[player_id];
     }
     return false;
 }
-
 
 export default {
     subscribe: subscribe,

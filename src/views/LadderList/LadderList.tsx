@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -15,77 +15,140 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 import * as React from "react";
-import {_, pgettext, interpolate} from "translate";
-import {Link} from "react-router";
-import {post, get} from "requests";
-import {LadderComponent} from "LadderComponent";
-import {Card} from "components";
-import {errorAlerter} from "misc";
-import {AdUnit} from "AdUnit";
+import { _, interpolate } from "@/lib/translate";
+import { Link } from "react-router-dom";
+import { post, get } from "@/lib/requests";
+import { LadderComponent } from "@/components/LadderComponent";
+import { Card } from "@/components/material";
+import { errorAlerter } from "@/lib/misc";
+import { useUser } from "@/lib/hooks";
+import { user_uploads_url } from "@/lib/cdn";
+import "./LadderList.css";
 
 /* Ensure these get picked up in our translations */
 _("Site 19x19 Ladder");
 _("Site 13x13 Ladder");
 _("Site 9x9 Ladder");
 
-interface LadderListProperties {
+interface LadderEntry {
+    id: number;
+    board_size: number;
+    name: string;
+    player_rank: number;
+    size: number;
+    group?: {
+        id: number;
+        icon: string;
+        name: string;
+    };
 }
 
-export class LadderList extends React.PureComponent<LadderListProperties, any> {
-    constructor(props) {
-        super(props);
-        this.state = {
-            ladders: []
-        };
-    }
+export function LadderList(): React.ReactElement {
+    const [ladders, setLadders] = React.useState<Array<LadderEntry>>([]);
+    const [joinedLadders, setJoinedLadders] = React.useState<Array<LadderEntry>>([]);
+    const user = useUser();
 
-    componentWillMount() {
-        this.resolve();
-    }
+    React.useEffect(() => {
+        window.document.title = "Ladders";
+        fetchLadders();
+    }, []);
 
-    resolve() {
+    function fetchLadders() {
         get("ladders")
-        .then((res) => {
-            this.setState({ladders: res.results});
-        })
-        .catch(errorAlerter);
+            .then((res) => {
+                setLadders(res.results);
+            })
+            .catch(errorAlerter);
+
+        if (!user.anonymous) {
+            get("me/ladders", { page_size: 100 })
+                .then((res) => {
+                    console.log(res.results);
+                    setJoinedLadders(res.results);
+                })
+                .catch(errorAlerter);
+        }
     }
 
-    join(ladder_id: number) {
+    const join = (ladder_id: number) => {
         post(`ladders/${ladder_id}/players`, {})
-        .then(() => {
-            this.resolve();
-        })
-        .catch(errorAlerter);
-    }
+            .then(() => {
+                fetchLadders();
+            })
+            .catch(errorAlerter);
+    };
 
-    render() {
-        return (
-        <div>
-            <AdUnit unit="cdm-zone-01" nag/>
+    return (
+        <div className="page-width">
             <div className="LadderList">
-                {this.state.ladders.map((ladder, idx) => (
-                    <Card key={idx}>
-                        <h2>{_(ladder.name)}</h2>
-                        {(ladder.player_rank < 0 || null) &&
-                            <button className="primary sm" onClick={this.join.bind(this, ladder.id)}>{_("Join")}</button>
-                        }
-                        <Link className="btn primary sm" to={`/ladder/${ladder.id}`}>{_("Full View") /* translators: View details of the selected ladder */}</Link>
+                <div className="page-nav">
+                    <h2>
+                        <i className="fa fa-list-ol"></i> {_("Ladders")}
+                    </h2>
+                    <div>
+                        {ladders.map((ladder, idx) => (
+                            <Link key={idx} to={`/ladder/${ladder.id}`}>
+                                {_(ladder.board_size + "x" + ladder.board_size)}
+                            </Link>
+                        ))}
+                    </div>
+                </div>
+                <div className="ladder-list-container">
+                    {ladders.map((ladder, idx) => (
+                        <Card key={idx}>
+                            <h2>{_(ladder.name)}</h2>
+                            {(ladder.player_rank < 0 || null) && (
+                                <button
+                                    className="primary sm"
+                                    disabled={user.anonymous}
+                                    onClick={() => join(ladder.id)}
+                                >
+                                    {_("Join")}
+                                </button>
+                            )}
+                            <Link className="btn primary sm" to={`/ladder/${ladder.id}`}>
+                                {
+                                    _(
+                                        "Full View",
+                                    ) /* translators: View details of the selected ladder */
+                                }
+                            </Link>
 
-                        <h4>{interpolate(_("{{ladder_size}} players"), {"ladder_size": ladder.size})}</h4>
+                            <h4>
+                                {interpolate(_("{{ladder_size}} players"), {
+                                    ladder_size: ladder.size,
+                                })}
+                            </h4>
 
-                        <LadderComponent
-                            pageSize={10}
-                            ladderId={ladder.id}
-                            hidePageControls={true}
-                            dontStartOnPlayersPage={true}
-                            />
-                    </Card>
-                ))}
+                            <LadderComponent ladderId={ladder.id} />
+                        </Card>
+                    ))}
+                </div>
+                {joinedLadders.length > 0 && (
+                    <div className="MyLadders">
+                        <h2 style={{ marginLeft: "1rem" }}>
+                            <i className="fa fa-list-ol"></i> {_("My Ladders")}
+                        </h2>
+                        {joinedLadders.map((ladder, idx) => (
+                            <div className="MyLadders-row" key={idx}>
+                                <span className="player-rank">#{ladder.player_rank}</span>
+                                {ladder.group?.icon ? (
+                                    <img
+                                        className="group-icon"
+                                        src={user_uploads_url(ladder.group.icon, 16)}
+                                        title={ladder.group.name}
+                                        alt={ladder.group.name}
+                                    />
+                                ) : (
+                                    <i className="fa fa-list-ol"></i>
+                                )}
+                                <Link to={`/ladder/${ladder.id}`}>{ladder.name}</Link>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
         </div>
-        );
-    }
+    );
 }

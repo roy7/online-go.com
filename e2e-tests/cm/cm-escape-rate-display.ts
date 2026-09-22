@@ -1,0 +1,240 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// cspell:words ERATEH
+
+/*
+ * Tests that the escape rate advisory section displays correctly on
+ * escaping reports, using real games and real CM-voted warnings.
+ *
+ * Uses init_e2e data:
+ * - E2E_CM_ERH_V1, E2E_CM_ERH_V2, E2E_CM_ERH_V3 : CMs with escaping power
+ *
+ * Creates dynamically:
+ * - accused user - created fresh each run
+ * - reporter user - created fresh each run
+ * - 5 games between reporter and accused
+ * - 4 escaping reports on games 1-4, each resolved by 3 CM votes
+ *   (2 informal warnings then 2 formal warnings)
+ * - 1 open escaping report on game 5 (the one we test the display on)
+ *
+ * The 2-then-2 split is dictated by the predictive filter: the badge counts
+ * the report under judgement, so as soon as a player has 2 prior confirmed
+ * escapes, the predicted count for the next report is 3 — over the threshold —
+ * and the informal-warn options are hidden. The test scenario therefore
+ * walks the same staircase a real CM workflow does (2 informals, then formals
+ * once the predictive threshold is reached).
+ *
+ * Expected display on report 5:
+ * - "IF this is escaping:" predictive header
+ * - "5 escapes in 5 games" (4 prior confirmed + 1 current report under judgement)
+ * - "Escaping too much" badge (red) — predicted rate crosses the 3% threshold
+ * - "Previously formally warned" (two formal warnings on record by this point)
+ *
+ * Flow:
+ * 1. Play 5 games between reporter and accused (pass+accept to finish each)
+ * 2. For games 1-2: file escaping report, 3 CMs vote informal_warn_escaper
+ * 3. For games 3-4: file escaping report, 3 CMs vote warn_escaper (formal)
+ * 4. For game 5: file escaping report (left open)
+ * 5. CM views report 5 and verifies escape rate display
+ */
+
+import type { CreateContextOptions } from "@helpers";
+
+import { BrowserContext, Page, TestInfo } from "@playwright/test";
+
+import {
+    captureReportNumber,
+    newTestUsername,
+    navigateToReport,
+    prepareNewUser,
+    reportPlayerByColor,
+    setupSeededCM,
+} from "@helpers/user-utils";
+
+import { waitForGameViewReady } from "@helpers/game-utils";
+
+import { expectOGSClickableByName } from "@helpers/matchers";
+import { expect } from "@playwright/test";
+
+import { dismissWarningDialogs, withReportCountTracking } from "@helpers/report-utils";
+
+import { playAndFinishGame, reportAndVote } from "./escape-rate-helpers";
+
+const CM_VOTERS = ["E2E_CM_ERH_V1", "E2E_CM_ERH_V2", "E2E_CM_ERH_V3"];
+
+export const cmEscapeRateDisplayTest = async (
+    {
+        createContext,
+    }: { createContext: (options?: CreateContextOptions) => Promise<BrowserContext> },
+    testInfo: TestInfo,
+) => {
+    // Tagged @Slow in cm.spec.ts: this test plays five sequential games and
+    // resolves four reports with three CM votes each to build up the escape
+    // history the display assertion checks. Each game also includes a 30 s
+    // post-game pause so the dev stack can commit Game.ended before the
+    // next escaping report (otherwise moderate.py:714-725 rejects it as
+    // HTTP 400). The cumulative time is genuine setup, not flakiness —
+    // see AGENTS.md for the rule.
+    const TIMEOUT_MS = 720 * 1000;
+
+    // Create fresh users
+    const accusedUsername = newTestUsername("ERHAcc"); // cspell:disable-line
+    const { userPage: accusedPage } = await prepareNewUser(createContext, accusedUsername, "test");
+
+    const reporterUsername = newTestUsername("ERHRep"); // cspell:disable-line
+    const { userPage: reporterPage } = await prepareNewUser(
+        createContext,
+        reporterUsername,
+        "test",
+    );
+
+    await withReportCountTracking(
+        reporterPage,
+        testInfo,
+        async (tracker) => {
+            // Set up the 3 CM contexts once and reuse them across all votes
+            const cmPages: Page[] = [];
+            const cmContexts: BrowserContext[] = [];
+            for (const cmUser of CM_VOTERS) {
+                const { seededCMPage, seededCMContext } = await setupSeededCM(
+                    createContext,
+                    cmUser,
+                );
+                cmPages.push(seededCMPage);
+                cmContexts.push(seededCMContext);
+            }
+
+            // ========================================
+            // Games 1-2: Play, report, 3 CMs vote informal_warn_escaper
+            // Games 3-4: Play, report, 3 CMs vote warn_escaper (formal)
+            //
+            // The vote action switches at game 3 because the predictive filter
+            // hides informal-warn options once predicted count >= 3. Games 1-2
+            // each have 0 then 1 prior confirmed escape, so predicted (1, then
+            // 2) stays under threshold and informal is offered. From game 3
+            // onward there are >= 2 prior confirmed escapes, so the predicted
+            // count reaches the 3% threshold and the filter switches the
+            // available options to formal-warn only.
+            // ========================================
+
+            let lastResolvedReportNumber: string | null = null;
+            for (let i = 1; i <= 4; i++) {
+                const voteAction = i <= 2 ? "informal_warn_escaper" : "warn_escaper";
+                await playAndFinishGame(reporterPage, accusedPage, accusedUsername, i);
+                lastResolvedReportNumber = await reportAndVote(reporterPage, cmPages, voteAction);
+
+                // Navigate home to trigger warning dialogs, then dismiss them
+                await accusedPage.goto("/");
+                await dismissWarningDialogs(accusedPage);
+                await dismissWarningDialogs(reporterPage);
+            }
+
+            // ========================================
+            // Game 5: Play and file the report we'll test the display on
+            // ========================================
+
+            await playAndFinishGame(reporterPage, accusedPage, accusedUsername, 5);
+            await waitForGameViewReady(reporterPage);
+
+            await reportPlayerByColor(
+                reporterPage,
+                ".black",
+                "escaping",
+                "E2E test: player escaped this game (report 5)",
+            );
+
+            await tracker.assertCountIncreasedBy(reporterPage, 1);
+
+            const reportNumber = await captureReportNumber(reporterPage);
+
+            // ========================================
+            // Verify the escape rate display (reuse V1's existing context)
+            // ========================================
+
+            const cmPage = cmPages[0];
+            await navigateToReport(cmPage, reportNumber);
+
+            // Verify the escape rate section is visible
+            const escapeRateInfo = cmPage.locator(".escape-rate-info");
+            await expect(escapeRateInfo).toBeVisible({ timeout: 15000 });
+
+            // Verify the predictive header is present
+            const conditionalHeader = cmPage.locator(".escape-rate-conditional-header");
+            await expect(conditionalHeader).toBeVisible();
+            await expect(conditionalHeader).toContainText("IF this is escaping:");
+
+            // Verify the badge shows "Escaping too much" (red)
+            const badge = cmPage.locator(".escape-rate-badge.escaping-too-much");
+            await expect(badge).toBeVisible();
+            await expect(badge).toContainText("Escaping too much");
+
+            // Verify rate detail shows the predicted count (4 prior + 1 current = 5)
+            const detail = cmPage.locator(".escape-rate-detail");
+            await expect(detail).toBeVisible();
+            await expect(detail).toContainText("5 escapes in 5 games");
+
+            // Verify formal warning status
+            const warningStatus = cmPage.locator(".formal-warning-status");
+            await expect(warningStatus).toBeVisible();
+            await expect(warningStatus).toContainText("Previously formally warned");
+
+            // ========================================
+            // Resolved-report check: predicted count is not off-by-one
+            // ========================================
+            //
+            // When CMs navigate back to a report that has already been voted
+            // as escaping, the current game's escape warning is in the count.
+            // The serializer must skip predict_escape_rate's +1 so the badge
+            // reflects the actual count, not actual + 1. Without the fix the
+            // predicted count would exceed games-in-window — impossible.
+            //
+            // Report 4 was voted warn_escaper; anchored to game 4's completion
+            // time the window contains games 1-4 (game 5 ended later, so it is
+            // excluded) and all four had escape warnings issued (2 informal +
+            // 2 formal). Expected display: "4 escapes in 4 games".
+
+            if (lastResolvedReportNumber === null) {
+                throw new Error("Expected at least one resolved report number");
+            }
+            await navigateToReport(cmPage, lastResolvedReportNumber);
+            const resolvedDetail = cmPage.locator(".escape-rate-detail");
+            await expect(resolvedDetail).toBeVisible({ timeout: 15000 });
+            await expect(resolvedDetail).toContainText("4 escapes in 4 games");
+
+            // Close all CM contexts
+            for (const ctx of cmContexts) {
+                await ctx.close();
+            }
+
+            // ========================================
+            // Clean up: cancel the open report
+            // ========================================
+
+            // Navigate directly to the my_reports route — going via
+            // /reports-center and clicking the sidebar tab is unreliable
+            // when the page was previously on /reports-center/all/<id>.
+            await reporterPage.goto("/reports-center/my_reports");
+
+            const cancelButton = await expectOGSClickableByName(reporterPage, /Cancel$/);
+            await cancelButton.click();
+
+            await tracker.assertCountReturnedToInitial(reporterPage);
+        },
+        TIMEOUT_MS,
+    );
+};

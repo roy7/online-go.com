@@ -1,0 +1,893 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+import * as React from "react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { ChallengeModalBody } from "./ChallengeModal";
+import { post } from "@/lib/requests";
+import * as data from "@/lib/data";
+import {
+    ChallengeDetails,
+    ChallengeModalProperties,
+} from "@/components/ChallengeModal/ChallengeModal.types";
+import { sanitizeChallengeDetails } from "./ChallengeModal.utils";
+import { bots_list, Bot } from "@/lib/bots";
+
+let mockPreferredSettings: unknown[] = [];
+const mockDataValues = new Map<string, unknown>();
+
+// Mock data module
+jest.mock("@/lib/data", () => ({
+    Replication: {
+        NONE: 0x0,
+        LOCAL_OVERWRITES_REMOTE: 0x1,
+        REMOTE_OVERWRITES_LOCAL: 0x2,
+        REMOTE_ONLY: 0x4,
+    },
+    get: (key: string, default_value: unknown) => {
+        if (mockDataValues.has(key)) {
+            return mockDataValues.get(key);
+        }
+        if (key === "user") {
+            return { id: 123, ranking: 10 };
+        }
+        if (key === "challenge.speed") {
+            return "live";
+        }
+        if (key === "challenge.challenge.live") {
+            return {
+                initialized: false,
+                min_ranking: 5,
+                max_ranking: 36,
+                challenger_color: "automatic",
+                rengo_auto_start: 0,
+                game: {
+                    name: "",
+                    rules: "japanese",
+                    ranked: true,
+                    width: 19,
+                    height: 19,
+                    handicap: -1,
+                    komi_auto: "automatic",
+                    komi: 5.5,
+                    disable_analysis: false,
+                    initial_state: null,
+                    private: false,
+                    rengo: false,
+                    rengo_casual_mode: true,
+                },
+            };
+        }
+        if (key === "challenge.bot") {
+            return 1;
+        }
+        if (key === "challenge.restrict_rank") {
+            return false;
+        }
+        if (key === "preferred-game-settings") {
+            return mockPreferredSettings;
+        }
+
+        return default_value;
+    },
+    set: jest.fn((key: string, value: unknown) => mockDataValues.set(key, value)),
+    remove: jest.fn(),
+    setDefault: jest.fn(),
+    watch: jest.fn(),
+    unwatch: jest.fn(),
+}));
+
+jest.mock("@/lib/requests", () => ({
+    post: jest.fn(),
+    del: jest.fn(),
+    get: jest.fn(() => Promise.resolve({})),
+}));
+
+jest.mock("@/components/ChallengeLinkButton", () => ({
+    copyChallengeLinkURL: jest.fn(),
+}));
+
+jest.mock("@/lib/swal_config", () => ({
+    alert: { fire: jest.fn(() => Promise.resolve({})), getConfirmButton: jest.fn() },
+}));
+
+jest.mock("@/lib/bots", () => ({
+    bots_list: jest.fn(() => []),
+    bot_count: jest.fn(() => 0),
+    getAcceptableTimeSetting: jest.fn(),
+}));
+
+jest.mock("@/lib/translate", () => ({
+    _: (s: string) => s,
+    pgettext: (c: string, s: string) => s,
+    npgettext: (c: string, s: string, p: string, n: number) => (n === 1 ? s : p),
+    llm_pgettext: (c: string, s: string) => s,
+    interpolate: (s: string, params: any[]) => {
+        let res = s;
+        if (Array.isArray(params)) {
+            for (const p of params) {
+                res = res.replace("%s", p);
+            }
+        }
+        if (typeof params === "object" && params !== null) {
+            for (const [key, value] of Object.entries(params)) {
+                res = res.replace(`{{${key}}}`, value);
+            }
+        }
+        return res;
+    },
+    moment: {
+        duration: () => ({
+            humanize: () => "humanized duration",
+        }),
+    },
+}));
+
+jest.mock("@/lib/rank_utils", () => ({
+    rankString: (r: number) => `Rank ${r}`,
+    rankSelectorIndexToText: (rank: number) => String(rank),
+    amateurRanks: () => [
+        { rank: 5, label: "25 Kyu" },
+        { rank: 36, label: "9 Dan+" },
+    ],
+}));
+
+jest.mock("@/components/PlayerIcon", () => ({
+    PlayerIcon: () => <div data-testid="player-icon" />,
+}));
+
+const defaultProps: ChallengeModalProperties = {
+    mode: "player",
+    initialState: null,
+    config: {
+        challenge: {
+            min_ranking: 5,
+            max_ranking: 36,
+            challenger_color: "automatic",
+            invite_only: false,
+            game: {
+                name: "Test Game",
+                rules: "japanese",
+                ranked: false,
+                width: 19,
+                height: 19,
+                handicap: 0,
+                komi_auto: "automatic",
+                disable_analysis: false,
+                initial_state: null,
+                private: false,
+                time_control: {
+                    system: "byoyomi",
+                    speed: "live",
+                    main_time: 1200,
+                    period_time: 30,
+                    periods: 5,
+                    pause_on_weekends: false,
+                },
+            },
+        },
+        conf: {
+            restrict_rank: false,
+            selected_board_size: "19x19",
+        },
+        time_control: {
+            system: "byoyomi",
+            speed: "live",
+            main_time: 1200,
+            period_time: 30,
+            periods: 5,
+            pause_on_weekends: false,
+        },
+    },
+};
+
+const openProps = {
+    ...defaultProps,
+    mode: "open" as const,
+    config: {
+        ...defaultProps.config!,
+        challenge: {
+            ...defaultProps.config!.challenge,
+            game: { ...defaultProps.config!.challenge.game, rengo: false, rengo_casual_mode: true },
+        },
+    },
+};
+
+const mockModal = {
+    close: jest.fn(),
+    on: jest.fn(),
+    off: jest.fn(),
+};
+
+describe("ChallengeModalBody", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockPreferredSettings = [];
+        mockDataValues.clear();
+    });
+
+    it.each([false, true])("submits disable analysis = %s", async (disabled) => {
+        const user = userEvent.setup();
+        jest.mocked(post).mockResolvedValueOnce({ id: 123 });
+        render(<ChallengeModalBody {...openProps} modal={mockModal} />);
+        const analysis = screen.getByLabelText(/disable analysis/i);
+        if (disabled) {
+            await user.click(analysis);
+        }
+        expect(analysis).toHaveProperty("checked", disabled);
+        await user.selectOptions(screen.getByLabelText(/board size/i), "9x9");
+        expect(screen.getByLabelText(/board size/i)).toHaveValue("9x9");
+        await user.click(screen.getByRole("button", { name: /create game/i }));
+        expect(post).toHaveBeenCalledWith(
+            "challenges",
+            expect.objectContaining({
+                game: expect.objectContaining({ width: 9, height: 9, disable_analysis: disabled }),
+            }),
+        );
+    });
+
+    it.each(["-1", "2", "0"])("submits and restores handicap %s", async (handicap) => {
+        const user = userEvent.setup();
+        jest.mocked(post).mockResolvedValueOnce({ id: 123 });
+        const view = render(<ChallengeModalBody {...openProps} modal={mockModal} />);
+        await user.selectOptions(
+            document.querySelector<HTMLSelectElement>("#challenge-handicap")!,
+            handicap,
+        );
+        expect(document.querySelector<HTMLSelectElement>("#challenge-handicap")!).toHaveValue(
+            handicap,
+        );
+        await user.click(screen.getByRole("button", { name: /create game/i }));
+        expect(post).toHaveBeenCalledWith(
+            "challenges",
+            expect.objectContaining({
+                game: expect.objectContaining({
+                    handicap: Number(handicap),
+                    komi_auto: "automatic",
+                    komi: undefined,
+                }),
+            }),
+        );
+        view.unmount();
+        render(<ChallengeModalBody mode="open" modal={mockModal} />);
+        expect(document.querySelector<HTMLSelectElement>("#challenge-handicap")!).toHaveValue(
+            handicap,
+        );
+    });
+
+    it.each([false, true])(
+        "submits private invite = %s with compatible options",
+        async (privateInvite) => {
+            const user = userEvent.setup();
+            jest.mocked(post).mockResolvedValueOnce({ id: 123 });
+            render(<ChallengeModalBody {...openProps} modal={mockModal} />);
+            expect(screen.queryByLabelText("Private")).not.toBeInTheDocument();
+            await user.click(screen.getByLabelText("Invite-only"));
+            await user.click(screen.getByLabelText("Private"));
+            expect(screen.getByLabelText("Private")).toBeChecked();
+            expect(screen.getByLabelText("Ranked")).toBeDisabled();
+            expect(screen.getByLabelText("Ranked")).not.toBeChecked();
+            expect(screen.getByLabelText("Rengo")).toBeDisabled();
+            if (!privateInvite) {
+                await user.click(screen.getByLabelText("Invite-only"));
+                expect(screen.queryByLabelText("Private")).not.toBeInTheDocument();
+                expect(screen.getByLabelText("Ranked")).toBeEnabled();
+                expect(screen.getByLabelText("Rengo")).toBeEnabled();
+            }
+            await user.click(screen.getByRole("button", { name: /create game/i }));
+            expect(post).toHaveBeenCalledWith(
+                "challenges",
+                expect.objectContaining({
+                    invite_only: privateInvite,
+                    game: expect.objectContaining({
+                        private: privateInvite,
+                        ranked: false,
+                        rengo: false,
+                    }),
+                }),
+            );
+        },
+    );
+
+    it("validates rengo auto-start and submits casual rengo with simple time", async () => {
+        const user = userEvent.setup();
+        jest.mocked(post).mockResolvedValueOnce({ id: 123 });
+        render(<ChallengeModalBody {...openProps} modal={mockModal} />);
+        await user.click(screen.getByLabelText("Rengo"));
+        expect(screen.getByLabelText("Rengo")).toBeChecked();
+        expect(screen.getByLabelText("Casual")).toBeChecked();
+        expect(screen.getByLabelText("Ranked")).toBeDisabled();
+        expect(screen.getByLabelText("Ranked")).not.toBeChecked();
+        const threshold = screen.getByLabelText("Auto-start");
+        const create = screen.getByRole("button", { name: /create game/i });
+        expect(threshold.closest(".form-group")).not.toHaveClass("hide");
+        await user.click(screen.getByLabelText("Casual"));
+        expect(threshold.closest(".form-group")).toHaveClass("hide");
+        await user.click(screen.getByLabelText("Casual"));
+        for (const value of ["1", "2", "3", "0"]) {
+            await user.clear(threshold);
+            await user.type(threshold, value);
+            expect(threshold).toHaveValue(value === "0" ? null : Number(value));
+            expect(create).toHaveProperty("disabled", value === "1" || value === "2");
+        }
+        await user.click(create);
+        expect(post).toHaveBeenCalledWith(
+            "challenges",
+            expect.objectContaining({
+                rengo_auto_start: 0,
+                game: expect.objectContaining({
+                    rengo: true,
+                    rengo_casual_mode: true,
+                    ranked: false,
+                    handicap: 0,
+                    time_control: "simple",
+                }),
+            }),
+        );
+        await user.click(screen.getByLabelText("Rengo"));
+        expect(screen.getByLabelText("Ranked")).toBeEnabled();
+        await user.click(screen.getByLabelText("Ranked"));
+        expect(screen.getByLabelText("Rengo")).toBeDisabled();
+    });
+
+    it("saves distinct rank preferences and restores the unrestricted request", async () => {
+        const user = userEvent.setup();
+        jest.mocked(post).mockResolvedValueOnce({ id: 123 });
+        const view = render(<ChallengeModalBody {...openProps} modal={mockModal} />);
+        await user.click(screen.getByRole("button", { name: "Add current setting" }));
+        await user.click(screen.getByLabelText(/restrict rank/i));
+        await user.selectOptions(screen.getByLabelText(/minimum ranking/i), "5");
+        await user.selectOptions(screen.getByLabelText(/maximum ranking/i), "36");
+        expect(screen.getByLabelText(/minimum ranking/i)).toHaveValue("5");
+        expect(screen.getByLabelText(/maximum ranking/i)).toHaveValue("36");
+        await user.click(screen.getByRole("button", { name: "Add current setting" }));
+        expect(data.set).toHaveBeenLastCalledWith(
+            "preferred-game-settings",
+            [
+                expect.objectContaining({ min_ranking: -1000, max_ranking: 1000 }),
+                expect.objectContaining({ min_ranking: 5, max_ranking: 36 }),
+            ],
+            data.Replication.REMOTE_OVERWRITES_LOCAL,
+        );
+        view.unmount();
+        render(<ChallengeModalBody {...openProps} modal={mockModal} />);
+        const preferred = document.querySelector(".preferred-settings-container input");
+        expect(preferred).not.toBeNull();
+        await user.click(preferred as HTMLInputElement);
+        await user.click(screen.getAllByRole("option")[0]);
+        expect(screen.getByLabelText(/restrict rank/i)).not.toBeChecked();
+        await user.click(screen.getByRole("button", { name: /create game/i }));
+        expect(post).toHaveBeenCalledWith(
+            "challenges",
+            expect.objectContaining({
+                min_ranking: -1000,
+                max_ranking: 1000,
+            }),
+        );
+    });
+
+    it("renders game name input", () => {
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+        const gameNameInput = screen.getByPlaceholderText("Game Name");
+        expect(gameNameInput).toBeInTheDocument();
+    });
+
+    it("shows the game name at the start of preferred settings options", async () => {
+        const user = userEvent.setup();
+        mockPreferredSettings = [
+            {
+                initialized: false,
+                min_ranking: -1000,
+                max_ranking: 1000,
+                challenger_color: "automatic",
+                rengo_auto_start: 0,
+                game: {
+                    name: "Bot Practice 1",
+                    rules: "japanese",
+                    ranked: false,
+                    width: 19,
+                    height: 19,
+                    handicap: 0,
+                    komi_auto: "automatic",
+                    disable_analysis: false,
+                    initial_state: null,
+                    private: false,
+                    rengo: false,
+                    rengo_casual_mode: true,
+                },
+            },
+        ];
+
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+
+        await user.click(screen.getByText("Preferred settings (1)"));
+
+        const options = Array.from(document.querySelectorAll(".ogs-react-select__option"));
+        expect(options[0].textContent).toBe(
+            "Bot Practice 1 | Unranked, 19x19, Japanese rules, 0 handicap",
+        );
+    });
+
+    it("sorts named preferred settings before unnamed ones", async () => {
+        const user = userEvent.setup();
+        mockPreferredSettings = [
+            {
+                initialized: false,
+                min_ranking: -1000,
+                max_ranking: 1000,
+                challenger_color: "automatic",
+                rengo_auto_start: 0,
+                game: {
+                    name: "",
+                    rules: "japanese",
+                    ranked: false,
+                    width: 19,
+                    height: 19,
+                    handicap: 0,
+                    komi_auto: "automatic",
+                    disable_analysis: false,
+                    initial_state: null,
+                    private: false,
+                    rengo: false,
+                    rengo_casual_mode: true,
+                },
+            },
+            {
+                initialized: false,
+                min_ranking: -1000,
+                max_ranking: 1000,
+                challenger_color: "automatic",
+                rengo_auto_start: 0,
+                game: {
+                    name: "Zebra",
+                    rules: "japanese",
+                    ranked: false,
+                    width: 19,
+                    height: 19,
+                    handicap: 0,
+                    komi_auto: "automatic",
+                    disable_analysis: false,
+                    initial_state: null,
+                    private: false,
+                    rengo: false,
+                    rengo_casual_mode: true,
+                },
+            },
+            {
+                initialized: false,
+                min_ranking: -1000,
+                max_ranking: 1000,
+                challenger_color: "automatic",
+                rengo_auto_start: 0,
+                game: {
+                    name: "Alpha",
+                    rules: "japanese",
+                    ranked: false,
+                    width: 19,
+                    height: 19,
+                    handicap: 0,
+                    komi_auto: "automatic",
+                    disable_analysis: false,
+                    initial_state: null,
+                    private: false,
+                    rengo: false,
+                    rengo_casual_mode: true,
+                },
+            },
+        ];
+
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+
+        await user.click(screen.getByText("Preferred settings (3)"));
+
+        const options = Array.from(document.querySelectorAll(".ogs-react-select__option"));
+        expect(options[0].textContent).toContain("Alpha |");
+        expect(options[1].textContent).toContain("Zebra |");
+        expect(options[2].textContent).toBe("Unranked, 19x19, Japanese rules, 0 handicap");
+    });
+
+    it("saves the typed game name in preferred settings", async () => {
+        const user = userEvent.setup();
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+
+        const gameNameInput = screen.getByPlaceholderText("Game Name");
+        await user.clear(gameNameInput);
+        await user.type(gameNameInput, "My Custom Game");
+        await user.click(screen.getByText("Add current setting"));
+
+        const { set } = jest.requireMock("@/lib/data");
+        const savedSettings = set.mock.calls.find(
+            ([key]: string[]) => key === "preferred-game-settings",
+        )?.[1] as ChallengeDetails[];
+        expect(savedSettings[0].game.name).toBe("My Custom Game");
+    });
+
+    it("saves unnamed games without the default game name", async () => {
+        const user = userEvent.setup();
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+
+        const gameNameInput = screen.getByPlaceholderText("Game Name");
+        await user.clear(gameNameInput);
+        await user.click(screen.getByText("Add current setting"));
+
+        const { set } = jest.requireMock("@/lib/data");
+        const savedSettings = set.mock.calls.find(
+            ([key]: string[]) => key === "preferred-game-settings",
+        )?.[1] as ChallengeDetails[];
+        expect(savedSettings[0].game.name).toBe("");
+    });
+
+    it("renders private checkbox", () => {
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+        const privateCheckbox = screen.getByLabelText("Private");
+        expect(privateCheckbox).toBeInTheDocument();
+    });
+
+    it("renders board size selection", () => {
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+        const boardSizeSelect = screen.getByRole("combobox", { name: /board size/i });
+        expect(boardSizeSelect).toBeInTheDocument();
+    });
+
+    it("renders challenger color selection", () => {
+        render(<ChallengeModalBody {...defaultProps} modal={mockModal} />);
+        const colorSelect = screen.getByLabelText(/your color/i);
+        expect(colorSelect).toBeInTheDocument();
+        expect(colorSelect).toHaveValue("automatic");
+    });
+
+    it("renders rank restrictions when enabled", async () => {
+        const openModeProps = {
+            ...defaultProps,
+            mode: "open",
+            config: {
+                ...defaultProps.config,
+                conf: {
+                    ...defaultProps.config?.conf,
+                    restrict_rank: true,
+                },
+                challenge: {
+                    ...defaultProps.config?.challenge,
+                    min_ranking: 5,
+                    max_ranking: 36,
+                    challenger_color: "automatic",
+                    invite_only: false,
+                    game: {
+                        name: "Test Game",
+                        rules: "japanese",
+                        ranked: false,
+                        width: 19,
+                        height: 19,
+                        handicap: 0,
+                        komi_auto: "automatic",
+                        disable_analysis: false,
+                        initial_state: null,
+                        private: false,
+                    },
+                },
+                time_control: {
+                    system: "byoyomi",
+                    speed: "live",
+                    main_time: 1200,
+                    period_time: 30,
+                    periods: 5,
+                    pause_on_weekends: false,
+                },
+            },
+        } as const;
+
+        render(<ChallengeModalBody {...openModeProps} modal={mockModal} />);
+
+        // Find the restrict rank checkbox
+        const restrictRankCheckbox = screen.getByLabelText(/restrict rank/i);
+        expect(restrictRankCheckbox).toBeInTheDocument();
+        expect(restrictRankCheckbox).toBeChecked();
+
+        // Check that the rank selection dropdowns are visible
+        const minRankSelect = screen.getByLabelText(/minimum ranking/i);
+        const maxRankSelect = screen.getByLabelText(/maximum ranking/i);
+
+        expect(minRankSelect).toBeInTheDocument();
+        expect(maxRankSelect).toBeInTheDocument();
+    });
+
+    it("creates an open challenge when submitted", async () => {
+        const openModeProps = {
+            ...defaultProps,
+            mode: "open",
+            config: {
+                ...defaultProps.config,
+                conf: {
+                    ...defaultProps.config?.conf,
+                    restrict_rank: false,
+                    selected_board_size: "19x19",
+                },
+                challenge: {
+                    ...defaultProps.config?.challenge,
+                    min_ranking: 5,
+                    max_ranking: 36,
+                    challenger_color: "automatic",
+                    invite_only: false,
+                    game: {
+                        name: "Test Game",
+                        rules: "japanese",
+                        ranked: false,
+                        width: 19,
+                        height: 19,
+                        handicap: 0,
+                        komi_auto: "automatic",
+                        disable_analysis: false,
+                        initial_state: null,
+                        private: false,
+                    },
+                },
+                time_control: {
+                    system: "byoyomi",
+                    speed: "live",
+                    main_time: 1200,
+                    period_time: 30,
+                    periods: 5,
+                    pause_on_weekends: false,
+                },
+            },
+        } as const;
+
+        // Mock the post request
+        (post as jest.Mock).mockResolvedValueOnce({ id: 123 });
+
+        render(<ChallengeModalBody {...openModeProps} modal={mockModal} />);
+
+        // Find and click the submit button
+        const submitButton = screen.getByRole("button", { name: /create game/i });
+        fireEvent.click(submitButton);
+
+        // Verify the post request was made with the correct data
+        expect(post).toHaveBeenCalledWith("challenges", {
+            initialized: false,
+            challenger_color: "automatic",
+            invite_only: false,
+            min_ranking: -1000,
+            max_ranking: 1000,
+            rengo_auto_start: 0,
+            game: {
+                name: "Test Game",
+                rules: "japanese",
+                ranked: false,
+                width: 19,
+                height: 19,
+                handicap: 0,
+                komi: undefined,
+                komi_auto: "automatic",
+                disable_analysis: false,
+                initial_state: null,
+                private: false,
+                time_control: "byoyomi",
+                time_control_parameters: {
+                    system: "byoyomi",
+                    speed: "live",
+                    main_time: 1200,
+                    period_time: 30,
+                    periods: 5,
+                    pause_on_weekends: false,
+                    time_control: "byoyomi",
+                },
+                pause_on_weekends: false,
+                rengo: undefined,
+                rengo_casual_mode: undefined,
+            },
+        });
+
+        // Verify the modal was closed
+        expect(mockModal.close).toHaveBeenCalled();
+    });
+
+    it("sends custom komi for a bot challenge", async () => {
+        const { bot_count, getAcceptableTimeSetting } = jest.requireMock("@/lib/bots");
+        (bots_list as jest.Mock).mockReturnValue([
+            { id: 42, username: "TestBot", ranking: 20, config: {} as any },
+        ]);
+        bot_count.mockReturnValue(1);
+        getAcceptableTimeSetting.mockReturnValue([{}, ""]);
+
+        const botProps = {
+            ...defaultProps,
+            mode: "computer" as const,
+            config: {
+                ...defaultProps.config,
+                conf: {
+                    restrict_rank: false,
+                    selected_board_size: "19x19",
+                },
+                challenge: {
+                    ...defaultProps.config?.challenge,
+                    min_ranking: 5,
+                    max_ranking: 36,
+                    challenger_color: "automatic",
+                    invite_only: false,
+                    game: {
+                        name: "Bot Match",
+                        rules: "japanese",
+                        ranked: true,
+                        width: 19,
+                        height: 19,
+                        handicap: 0,
+                        komi_auto: "automatic",
+                        disable_analysis: false,
+                        initial_state: null,
+                        private: false,
+                    },
+                },
+                time_control: {
+                    system: "byoyomi",
+                    speed: "live",
+                    main_time: 1200,
+                    period_time: 30,
+                    periods: 5,
+                    pause_on_weekends: false,
+                },
+            },
+        } as const;
+
+        (post as jest.Mock).mockResolvedValueOnce({ id: 999 });
+
+        render(<ChallengeModalBody {...botProps} modal={mockModal} />);
+
+        // Expand the custom settings panel.
+        const customBtn = screen.getByRole("button", { name: /Show Custom Settings/i });
+        fireEvent.click(customBtn);
+
+        // Switch komi to custom.
+        const komiSelect = document.getElementById("challenge-komi") as HTMLSelectElement;
+        fireEvent.change(komiSelect, { target: { value: "custom" } });
+
+        // Type 16.5 into the custom komi number input.
+        const komiInput = document.querySelector(
+            'input[type="number"][step="0.5"]',
+        ) as HTMLInputElement;
+        fireEvent.change(komiInput, { target: { value: "16.5" } });
+
+        // Submit via the Play button.
+        const playBtn = screen.getByRole("button", { name: /^Play$/ });
+        fireEvent.click(playBtn);
+
+        expect(post).toHaveBeenCalled();
+        const [url, payload] = (post as jest.Mock).mock.calls[0];
+        expect(url).toBe("players/42/challenge");
+        expect(payload.game.ranked).toBe(false);
+        expect(payload.game.komi_auto).toBe("custom");
+        expect(payload.game.komi).toBe(16.5);
+    });
+
+    it("sanitizes legacy data", () => {
+        const challengeDetails: any = {
+            initialized: false,
+            min_ranking: 20,
+            max_ranking: 30,
+            challenger_color: "automatic",
+            rengo_auto_start: 0,
+            game: {
+                name: "test game 1",
+                rules: "aga",
+                ranked: false,
+                width: 9,
+                height: 9,
+                handicap: "5",
+                komi_auto: "automatic",
+                disable_analysis: false,
+                initial_state: undefined,
+                private: false,
+                rengo: false,
+                rengo_casual_mode: false,
+            },
+        };
+        expect(sanitizeChallengeDetails(challengeDetails).game.handicap).toBe(5);
+        expect("komi" in sanitizeChallengeDetails(challengeDetails)).toBeFalsy();
+
+        challengeDetails.game.komi = "4.5";
+        expect(sanitizeChallengeDetails(challengeDetails).game.komi).toBe(4.5);
+    });
+});
+
+describe("ChallengeModalBotFiltering", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    const computerProps = {
+        ...defaultProps,
+        mode: "computer" as const,
+    };
+
+    function renderAndCheckBot(
+        bot: Partial<Bot>,
+        expectedCategory: string,
+        unexpectedCategories: string[],
+    ) {
+        const { bot_count, getAcceptableTimeSetting } = jest.requireMock("@/lib/bots");
+        (bots_list as jest.Mock).mockReturnValue([bot]);
+        bot_count.mockReturnValue(1);
+        getAcceptableTimeSetting.mockReturnValue([{}, ""]);
+
+        render(<ChallengeModalBody {...computerProps} modal={mockModal} />);
+
+        // Verify it is in the expected category
+        const categoryElements = screen.getAllByRole("heading", { level: 1 });
+        const expectedHeader = categoryElements.find((el) => el.textContent === expectedCategory);
+        expect(expectedHeader).toBeInTheDocument();
+
+        // The bot should be in the parent container of this header
+        const categoryContainer = expectedHeader!.closest(".bot-category");
+        expect(categoryContainer).toHaveTextContent(bot.username as string);
+
+        // Verify it is NOT in unexpected categories
+        for (const unexpectedCategory of unexpectedCategories) {
+            const unexpectedHeader = categoryElements.find(
+                (el) => el.textContent === unexpectedCategory,
+            );
+            if (unexpectedHeader) {
+                const unexpectedContainer = unexpectedHeader.closest(".bot-category");
+                expect(unexpectedContainer).not.toHaveTextContent(bot.username as string);
+            }
+        }
+    }
+
+    it("should show TopBeginnerBot10 in Beginner category", () => {
+        // Rank 10.0 = 20.0k
+        renderAndCheckBot(
+            { id: 1, username: "TopBeginnerBot10", ranking: 10, config: {} as any },
+            "Beginner",
+            ["Intermediate", "Advanced"],
+        );
+    });
+
+    it("should show BottomIntermediateBot10_1 in Intermediate category", () => {
+        // Rank 10.1 = 19.9k
+        renderAndCheckBot(
+            { id: 2, username: "BottomIntermediateBot10_1", ranking: 10.1, config: {} as any },
+            "Intermediate",
+            ["Beginner", "Advanced"],
+        );
+    });
+
+    it("should show TopIntermediateBot25 in Intermediate category", () => {
+        // Rank 25.0 = 5.0k
+        renderAndCheckBot(
+            { id: 3, username: "TopIntermediateBot25", ranking: 25, config: {} as any },
+            "Intermediate",
+            ["Beginner", "Advanced"],
+        );
+    });
+
+    it("should show BottomAdvancedBot25_1 in Advanced category", () => {
+        // Rank 25.1 = 4.9k
+        renderAndCheckBot(
+            { id: 4, username: "BottomAdvancedBot25_1", ranking: 25.1, config: {} as any },
+            "Advanced",
+            ["Beginner", "Intermediate"],
+        );
+    });
+
+    it("should show TopAdvancedBot99 in Advanced category", () => {
+        // Rank 99.0 = Stronger than 9d
+        renderAndCheckBot(
+            { id: 5, username: "TopAdvancedBot99", ranking: 99, config: {} as any },
+            "Advanced",
+            ["Beginner", "Intermediate"],
+        );
+    });
+});

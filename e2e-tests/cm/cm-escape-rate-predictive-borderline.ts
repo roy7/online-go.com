@@ -1,0 +1,234 @@
+/*
+ * Copyright (C)  Online-Go.com
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// cspell:words ERPB
+
+/*
+ * Tests the predictive badge boundary: a player with 2 prior confirmed
+ * escapes (both informal) opens a third escaping report. The predictive
+ * count is 3, which crosses the 3% threshold, so:
+ *   - the badge reads "Escaping too much"
+ *   - the displayed count is "3 escapes in 3 games"
+ *   - formal-warn vote options ARE present
+ *   - informal-warn vote options are NOT present
+ *
+ * Uses init_e2e CM voters from the existing escape-rate display test:
+ *   E2E_CM_ERH_V1, E2E_CM_ERH_V2, E2E_CM_ERH_V3.
+ *
+ * Creates dynamically per run:
+ *   - accused user
+ *   - reporter user
+ *   - 3 games
+ *   - 2 escaping reports on games 1-2 resolved by 3 CMs voting
+ *     informal_warn_escaper
+ *   - 1 open escaping report on game 3 (the one we inspect)
+ */
+
+import type { CreateContextOptions } from "@helpers";
+
+import { BrowserContext, Page, TestInfo } from "@playwright/test";
+
+import {
+    captureReportNumber,
+    navigateToReport,
+    newTestUsername,
+    prepareNewUser,
+    reportPlayerByColor,
+    setupSeededCM,
+} from "@helpers/user-utils";
+
+import {
+    acceptDirectChallenge,
+    createDirectChallenge,
+    defaultChallengeSettings,
+} from "@helpers/challenge-utils";
+
+import { passAndScoreGame, playMoves } from "@helpers/game-utils";
+
+import { expectOGSClickableByName } from "@helpers/matchers";
+import { expect } from "@playwright/test";
+
+import {
+    submitReportVote,
+    dismissWarningDialogs,
+    withReportCountTracking,
+} from "@helpers/report-utils";
+
+const CM_VOTERS = ["E2E_CM_ERH_V1", "E2E_CM_ERH_V2", "E2E_CM_ERH_V3"];
+
+async function playAndFinishGame(
+    reporterPage: Page,
+    accusedPage: Page,
+    accusedUsername: string,
+    gameIndex: number,
+): Promise<void> {
+    const gameName = `E2E ERPB Game ${gameIndex}`;
+    // Reporter plays white deliberately: ranked challenges (the default here)
+    // disable custom komi entirely, so automatic komi's default advantage to white
+    // is unavoidable. With only a handful of symmetric center stones and no
+    // captures, that advantage decides the game — putting the accused on black
+    // instead of white means the accused loses on komi rather than winning, which
+    // escaping.not_winner now requires for the report below to be filed at all.
+    await createDirectChallenge(reporterPage, accusedUsername, {
+        ...defaultChallengeSettings,
+        gameName,
+        boardSize: "9x9",
+        speed: "live",
+        mainTime: "300",
+        timePerPeriod: "30",
+        periods: "5",
+        color: "white",
+    });
+
+    await acceptDirectChallenge(accusedPage, reporterPage);
+
+    const goban = reporterPage.locator(".Goban[data-pointers-bound]");
+    await goban.waitFor({ state: "visible" });
+
+    // playMoves takes (black, white) positionally — accused is black here, reporter
+    // is white.
+    await playMoves(accusedPage, reporterPage, ["D5", "E5", "D6", "E6"], "9x9");
+
+    await passAndScoreGame(accusedPage, reporterPage);
+}
+
+async function reportAndVote(
+    reporterPage: Page,
+    cmPages: Page[],
+    voteAction: string,
+): Promise<void> {
+    await reportPlayerByColor(
+        reporterPage,
+        ".black",
+        "escaping",
+        "E2E test: player escaped this game",
+    );
+
+    const reportNumber = await captureReportNumber(reporterPage);
+
+    for (const cmPage of cmPages) {
+        await navigateToReport(cmPage, reportNumber);
+        await cmPage.locator(`input[value="${voteAction}"]`).click();
+        await submitReportVote(cmPage);
+    }
+}
+
+export const cmEscapeRatePredictiveBorderlineTest = async (
+    {
+        createContext,
+    }: { createContext: (options?: CreateContextOptions) => Promise<BrowserContext> },
+    testInfo: TestInfo,
+) => {
+    const TIMEOUT_MS = 360 * 1000;
+
+    const accusedUsername = newTestUsername("ERPBAcc"); // cspell:disable-line
+    const { userPage: accusedPage } = await prepareNewUser(createContext, accusedUsername, "test");
+
+    const reporterUsername = newTestUsername("ERPBRep"); // cspell:disable-line
+    const { userPage: reporterPage } = await prepareNewUser(
+        createContext,
+        reporterUsername,
+        "test",
+    );
+
+    await withReportCountTracking(
+        reporterPage,
+        testInfo,
+        async (tracker) => {
+            const cmPages: Page[] = [];
+            const cmContexts: BrowserContext[] = [];
+            for (const cmUser of CM_VOTERS) {
+                const { seededCMPage, seededCMContext } = await setupSeededCM(
+                    createContext,
+                    cmUser,
+                );
+                cmPages.push(seededCMPage);
+                cmContexts.push(seededCMContext);
+            }
+
+            // Games 1-2: file, vote informal_warn_escaper -> 2 prior confirmed escapes.
+            for (let i = 1; i <= 2; i++) {
+                await playAndFinishGame(reporterPage, accusedPage, accusedUsername, i);
+                await reportAndVote(reporterPage, cmPages, "informal_warn_escaper");
+                await accusedPage.goto("/");
+                await dismissWarningDialogs(accusedPage);
+                await dismissWarningDialogs(reporterPage);
+            }
+
+            // Game 3: file but leave open -- this is the report we inspect.
+            await playAndFinishGame(reporterPage, accusedPage, accusedUsername, 3);
+
+            await reportPlayerByColor(
+                reporterPage,
+                ".black",
+                "escaping",
+                "E2E test: player escaped (report 3, borderline)",
+            );
+
+            await tracker.assertCountIncreasedBy(reporterPage, 1);
+
+            const reportNumber = await captureReportNumber(reporterPage);
+
+            const cmPage = cmPages[0];
+            await navigateToReport(cmPage, reportNumber);
+
+            // Header: "IF this is escaping:"
+            const conditionalHeader = cmPage.locator(".escape-rate-conditional-header");
+            await expect(conditionalHeader).toBeVisible({ timeout: 15000 });
+            await expect(conditionalHeader).toContainText("IF this is escaping:");
+
+            // Predicted count: 2 prior + 1 current = 3 in 3 games
+            const detail = cmPage.locator(".escape-rate-detail");
+            await expect(detail).toContainText("3 escapes in 3 games");
+
+            // Badge: "Escaping too much" (red)
+            const badge = cmPage.locator(".escape-rate-badge.escaping-too-much");
+            await expect(badge).toBeVisible();
+            await expect(badge).toContainText("Escaping too much");
+
+            // Formal-warn vote option present
+            const formalVote = cmPage.locator('input[value="warn_escaper"]');
+            await expect(formalVote).toBeVisible();
+
+            // Informal-warn vote options absent
+            const informalVote = cmPage.locator('input[value="informal_warn_escaper"]');
+            await expect(informalVote).toHaveCount(0);
+            const informalAnnulVote = cmPage.locator(
+                'input[value="informal_warn_escaper_and_annul"]',
+            );
+            await expect(informalAnnulVote).toHaveCount(0);
+
+            for (const ctx of cmContexts) {
+                await ctx.close();
+            }
+
+            // Clean up: cancel the open report so we leave a tidy state.
+            await reporterPage.goto("/reports-center/my_reports");
+            const report = reporterPage.locator("div.incident").filter({
+                has: reporterPage.locator(
+                    `button[data-report-id="${reportNumber.replace(/^R/, "")}"]`,
+                ),
+            });
+            await expect(report).toBeVisible();
+            const cancelButton = await expectOGSClickableByName(report, /Cancel$/);
+            await cancelButton.click();
+
+            await tracker.assertCountReturnedToInitial(reporterPage);
+        },
+        TIMEOUT_MS,
+    );
+};

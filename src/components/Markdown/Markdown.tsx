@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017  Online-Go.com
+ * Copyright (C)  Online-Go.com
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,40 +16,211 @@
  */
 
 import * as React from "react";
-import * as commonmark from "commonmark";
+import markdown_it from "markdown-it";
+import sanitizeHtml from "sanitize-html";
+//import moment from "moment";
+import { profanity_filter } from "@/lib/profanity_filter";
+import { localize_time_strings } from "@/lib/localize-time";
 
 interface MarkdownProps {
-    source: string;
+    source?: string;
+    className?: string;
 }
 
-let parser = new commonmark.Parser();
-let renderer = new commonmark.HtmlRenderer();
+interface MarkdownState {}
 
-export class Markdown extends React.PureComponent<MarkdownProps, {html}> {
-    constructor(props) {
+const md = markdown_it({
+    html: true,
+    linkify: true,
+    typographer: true,
+});
+
+function sanitize(src: string) {
+    return sanitizeHtml(src, {
+        allowedTags: [
+            "a",
+            "article",
+            "aside",
+            "body",
+            "br",
+            "details",
+            "div",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+
+            "header",
+            "hgroup",
+            "hr",
+            "footer",
+            "nav",
+            "p",
+            "section",
+            "span",
+            "summary",
+
+            "datalist",
+            "fieldset",
+            "label",
+            "legend",
+            "abbr",
+            "acronym",
+            "address",
+            "b",
+            "bdi",
+            "bdo",
+            "big",
+            "blockquote",
+            "center",
+            "cite",
+            "code",
+            "del",
+            "dfn",
+            "em",
+            "font",
+            "i",
+            "ins",
+            "mark",
+            "output",
+            "pre",
+            "progress",
+            "q",
+            "rp",
+            "rt",
+            "ruby",
+            "s",
+            "samp",
+            "small",
+            "strike",
+            "strong",
+            "sub",
+            "sup",
+            "tt",
+            "u",
+            "dd",
+            "dir",
+            "dl",
+            "dt",
+            "li",
+            "ol",
+            "menu",
+            "ul",
+
+            "caption",
+            "col",
+            "colgroup",
+            "table",
+            "tbody",
+            "td",
+            "tfoot",
+            "thead",
+            "th",
+            "tr",
+
+            "area",
+            "audio",
+            "embed",
+            /* cspell:disable-next-line */
+            "flgcaption",
+            "figure",
+            "img",
+            "map",
+            "source",
+            "time",
+            "video",
+            "link",
+        ],
+
+        allowedAttributes: {
+            "*": [
+                "href",
+                "align",
+                "style",
+                "bgcolor",
+                "alt",
+                "src",
+                "width",
+                "height",
+                "class",
+                "rel",
+            ],
+        },
+        allowedStyles: {
+            "*": {
+                "background-color": [/.*/],
+                border: [/.*/],
+                "border-radius": [/.*/],
+                "border-color": [/.*/],
+                "box-shadow": [/.*/],
+                color: [/.*/],
+                font: [/.*/],
+                "font-family": [/.*/],
+                "font-size": [/.*/],
+                margin: [/.*/],
+                "margin-bottom": [/.*/],
+                "margin-left": [/.*/],
+                "margin-right": [/.*/],
+                "margin-top": [/.*/],
+                padding: [/.*/],
+                "padding-bottom": [/.*/],
+                "padding-left": [/.*/],
+                "padding-right": [/.*/],
+                "padding-top": [/.*/],
+                "text-align": [/.*/],
+            },
+        },
+        transformTags: {
+            //'script': kill,
+            //'iframe': kill,
+            //'style': kill,
+            a: (tagName, attribs) => {
+                attribs["rel"] = "noopener";
+                return { tagName, attribs };
+            },
+        },
+    });
+}
+
+// this component is protected from calling sanitizeHtml to often by memoizing, below.
+
+class _Markdown extends React.PureComponent<MarkdownProps, MarkdownState> {
+    constructor(props: MarkdownProps) {
         super(props);
-        this.state = {
-            html: this.props.source ? renderer.render(parser.parse(this.massage(this.props.source))) : ""
-        };
+        this.state = {};
     }
 
-    massage(source: string): string {
-        source = source.replace(/^(#+)([a-zA-Z0-9])/g, "$1 $2"); // headers used to behave like this
-        source = source.replace(/<script/ig, "(script"); // hasnt' been exploitable yet with how react works i don't think, but they leave most html intact for some stupid reason, this string shouldn't exist anyways
+    //
+    preprocess(source: string): string {
+        // Profanity filter
+        source = profanity_filter(source);
+
+        // Allow people to have #header style markdown for headers, markdown-it requires a space between
+        source = source
+            .split("\n")
+            .map((l) => l.replace(/^(#+)([a-zA-Z0-9])/, "$1 $2"))
+            .join("\n");
+
+        // Support locale time replacements
+        source = localize_time_strings(source);
+
         return source;
     }
 
-    componentWillReceiveProps(next_props) {{{
-        if (next_props.source !== this.props.source) {
-            this.setState({
-                html: next_props.source ? renderer.render(parser.parse(this.massage(next_props.source))) : ""
-            });
-        }
-    }}}
-
     render() {
+        const html = this.props.source
+            ? sanitize(md.render(this.preprocess(this.props.source)))
+            : "";
+
         return (
-            <div dangerouslySetInnerHTML={ {__html: this.state.html } } />
+            <div
+                className={this.props.className ? this.props.className : ""}
+                dangerouslySetInnerHTML={{ __html: html }}
+            />
         );
     }
 }
+
+export const Markdown = React.memo(_Markdown);
